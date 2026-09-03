@@ -1,0 +1,5 @@
+src-tauri/target/
+dist/
+*.db
+*.db-wal
+*.db-shm

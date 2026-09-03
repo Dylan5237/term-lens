@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>TermLens</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a2e; --muted: #6b6b7b; --accent: #534AB7;
+    --border: rgba(0,0,0,.12); --chip-ai: #E1F5EE; --chip-ms: #E6F1FB;
+    --chip-personal: #FAEEDA; --chip-pending: #FCEBEB;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; user-select:none; }
+  html,body { background:transparent; overflow:hidden; font-family:"Microsoft YaHei UI","Segoe UI",sans-serif; }
+  #card {
+    margin:6px; background:var(--bg); color:var(--fg); border:1px solid var(--border);
+    border-radius:10px; padding:10px 12px; box-shadow:0 2px 6px rgba(0,0,0,.18);
+  }
+  #head { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+  #term { font-size:14px; font-weight:500; color:var(--accent); font-family:Consolas,monospace; }
+  .chip { font-size:11px; padding:1px 6px; border-radius:8px; color:var(--muted); }
+  .chip.ai{background:var(--chip-ai);} .chip.ms{background:var(--chip-ms);}
+  .chip.personal{background:var(--chip-personal);} .chip.pending{background:var(--chip-pending);}
+  #offline { font-size:11px; color:#A32D2D; display:none; }
+  #zh { font-size:15px; font-weight:500; margin:2px 0; }
+  #note { font-size:12px; color:var(--muted); line-height:1.5; max-height:40px; overflow:hidden; }
+  #cands { margin-top:4px; }
+  .cand { display:inline-block; font-size:12px; margin:2px 4px 2px 0; padding:2px 8px;
+          border:1px solid var(--border); border-radius:8px; cursor:pointer; }
+  .cand:hover { border-color:var(--accent); color:var(--accent); }
+  #acts { display:flex; gap:6px; margin-top:8px; align-items:center; }
+  button { font-size:12px; padding:3px 10px; border:1px solid var(--border); border-radius:6px;
+           background:#f7f7f8; color:var(--fg); cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  #fix { display:none; flex:1; }
+  #fix input { width:60%; font-size:12px; padding:3px 6px; border:1px solid var(--border); border-radius:6px; }
+  #loading { font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div id="card">
+  <div id="head">
+    <span id="term">—</span>
+    <span id="layer" class="chip"></span>
+    <span id="domain"></span>
+    <span id="offline">离线</span>
+  </div>
+  <div id="zh"></div>
+  <div id="note"></div>
+  <div id="loading"></div>
+  <div id="cands"></div>
+  <div id="acts">
+    <button id="bAdopt" class="primary">采纳</button>
+    <button id="bFix">修改</button>
+    <button id="bReject">否决</button>
+    <span id="fix"><input id="fixInput" placeholder="输入正确译法" /><button id="bFixOk">存</button></span>
+  </div>
+</div>
+<script src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,96 @@
+en,zh,domain,ctx_hints,keep_policy,note,layer,source
+agent,智能体,llm,"[""llm"", ""prompt"", ""tool"", ""orchestrator""]",translate,能自主感知-决策-执行的AI系统；禁用代理译法,ai,agentic-cn
+multi-agent,多智能体,llm,"[""collaboration"", ""orchestrator""]",translate,多个Agent分工协作架构,ai,agentic-cn
+tool use,工具使用,llm,"[""function"", ""mcp"", ""api""]",translate,Agent调用外部工具的能力,ai,agentic-cn
+tool call,工具调用,llm,"[""function calling"", ""mcp"", ""agent""]",translate,模型发起外部工具调用,ai,agentic-cn
+function calling,函数调用,llm,"[""openai"", ""schema"", ""tool""]",translate,按结构化schema调用函数,ai,manual
+prompt,提示词,llm,"[""system"", ""user"", ""engineering""]",translate,引导大模型生成输出的指令文本,ai,agentic-cn
+system prompt,系统提示词,llm,"[""role"", ""instruction""]",translate,设定模型行为与约束的指令,ai,agentic-cn
+prompt injection,提示词注入,security,"[""attack"", ""llm"", ""untrusted""]",translate,通过输入操纵模型执行非预期指令的攻击,ai,manual
+prompt caching,提示词缓存,llm,"[""cost"", ""latency"", ""prefix""]",translate,复用前缀KV降低开销,ai,manual
+hallucination,幻觉,llm,"[""model"", ""generation"", ""factual""]",translate,模型生成看似合理但事实错误的内容,ai,agentic-cn
+token,词元,llm,"[""context"", ""window"", ""bpe""]",translate,模型处理文本的最小单位,ai,dongshuyan-llm
+token,令牌,security,"[""auth"", ""jwt"", ""session"", ""access""]",translate,身份凭证,ai,dongshuyan-llm
+context window,上下文窗口,llm,"[""token"", ""limit"", ""kv""]",translate,一次推理可利用的输入上下文容量,ai,dongshuyan-llm
+context rot,上下文腐烂,llm,"[""long context"", ""degradation"", ""window""]",translate,上下文过长导致注意力质量下降,ai,manual
+fine-tuning,微调,llm,"[""lora"", ""sft"", ""training""]",translate,在特定数据上继续训练改变模型行为,ai,dongshuyan-llm
+lora,低秩适配,llm,"[""peft"", ""fine-tuning"", ""adapter""]",translate,参数高效微调方法,ai,dongshuyan-llm
+rlhf,人类反馈强化学习,llm,"[""alignment"", ""reward"", ""preference""]",translate,用人类偏好信号优化模型行为,ai,dongshuyan-llm
+embedding,嵌入向量,llm,"[""vector"", ""similarity"", ""retrieval""]",translate,文本映射到向量空间的表示,ai,dongshuyan-llm
+rag,检索增强生成,llm,"[""retrieval"", ""knowledge"", ""vector""]",translate,用外部知识源增强生成准确性,ai,agentic-cn
+mcp,模型上下文协议,llm,"[""tool"", ""server"", ""protocol""]",keep,Model Context Protocol，AI与工具连接的标准化协议,ai,agentic-cn
+guardrail,护栏,llm,"[""safety"", ""constraint"", ""policy""]",translate,约束AI行为的安全机制,ai,manual
+chain of thought,思维链,llm,"[""cot"", ""reasoning"", ""step""]",translate,让模型逐步推理提升复杂任务质量,ai,dongshuyan-llm
+inference,推理,llm,"[""generation"", ""serving"", ""api""]",translate,给定输入让模型生成输出的过程,ai,dongshuyan-llm
+reasoning,推理,llm,"[""agent loop"", ""thinking"", ""planning""]",translate,模型分析问题形成决策的过程,ai,manual
+orchestrator,编排器,llm,"[""agent"", ""scheduler"", ""workflow""]",translate,统一调度多个Agent的组件,ai,dongshuyan-llm
+orchestration,编排,devops,"[""kubernetes"", ""workflow"", ""agent""]",translate,多组件协调运行,ai,manual
+trajectory,轨迹,llm,"[""agent"", ""episode"", ""log""]",translate,Agent执行全过程的完整记录,ai,dongshuyan-llm
+agent loop,智能体循环,llm,"[""react"", ""observe"", ""tool call""]",translate,感知-决策-执行-观察的闭环,ai,manual
+human-in-the-loop,人在回路中,llm,"[""approval"", ""feedback"", ""review""]",translate,流程中保留人工确认环节,ai,agentic-cn
+reflection,反思,llm,"[""agent"", ""self-correction"", ""iteration""]",translate,Agent自我检查修正的能力,ai,agentic-cn
+planning,规划,llm,"[""agent"", ""task"", ""decomposition""]",translate,Agent拆解目标为步骤的能力,ai,agentic-cn
+memory,记忆系统,llm,"[""agent"", ""context"", ""store""]",translate,Agent存储上下文与知识的能力,ai,agentic-cn
+grounding,定位接地,llm,"[""visual"", ""detection"", ""bbox""]",translate,指认对象在输入中的位置,ai,manual
+multimodal,多模态,llm,"[""vision"", ""image"", ""audio""]",translate,处理多种类型输入,ai,manual
+stop sequence,停止序列,llm,"[""generation"", ""eos"", ""api""]",translate,触发生成终止的字符串,ai,manual
+streaming,流式输出,llm,"[""sse"", ""chunk"", ""generation""]",translate,模型边生成边传输,ai,manual
+safety filter,安全过滤,security,"[""policy"", ""moderation"", ""block""]",translate,拦截有害输入输出,ai,manual
+smoke,冒烟测试,devops,"[""test"", ""ci"", ""pipeline"", ""runtime""]",translate,快速验证核心功能可用的轻量测试,ai,manual
+smoke test,冒烟测试,devops,"[""ci"", ""pipeline"", ""build""]",translate,构建后快速验证基本功能的测试,ai,manual
+regression,回归测试,devops,"[""test"", ""bug"", ""fix""]",translate,验证修改未破坏既有功能,ai,manual
+flaky,不稳定测试,devops,"[""test"", ""ci"", ""retry""]",translate,时过时不过的测试,ai,manual
+fixture,测试固定装置,devops,"[""test"", ""db"", ""setup""]",translate,测试预置环境数据,ai,manual
+harness,测试挂具,devops,"[""test"", ""evaluation"", ""agent""]",translate,驱动被测对象运行的支撑框架,ai,manual
+runtime,程序运行时环境,general,"[""execution"", ""link"", ""gc"", ""jvm""]",translate,程序运行时的执行环境,ai,manual
+mock,模拟对象,backend,"[""test"", ""stub"", ""spy""]",translate,测试中替代真实依赖的对象,ai,manual
+stub,桩,backend,"[""test"", ""mock"", ""interface""]",translate,提供固定返回值的最小实现,ai,manual
+idempotent,幂等,backend,"[""api"", ""retry"", ""request""]",translate,重复执行结果不变,ai,manual
+race condition,竞态条件,backend,"[""concurrency"", ""lock"", ""thread""]",translate,并发时序导致的错误行为,ai,manual
+deadlock,死锁,backend,"[""lock"", ""wait"", ""graph""]",translate,相互等待资源无法推进,ai,manual
+backpressure,背压,backend,"[""stream"", ""queue"", ""flow""]",translate,下游过载时向上游反馈限速,ai,manual
+middleware,中间件,backend,"[""http"", ""pipeline"", ""express""]",translate,请求处理链上的拦截组件,ai,manual
+migration,迁移,backend,"[""database"", ""schema"", ""version""]",translate,数据结构版本变更,ai,manual
+cache stampede,缓存击穿,backend,"[""redis"", ""expiry"", ""thundering""]",translate,热点key失效瞬间大量请求打到存储,ai,manual
+debounce,防抖,frontend,"[""input"", ""resize"", ""timer""]",translate,高频事件合并为一次处理,ai,manual
+throttle,节流,frontend,"[""rate"", ""scroll"", ""limit""]",translate,限制事件处理频率,ai,manual
+hydration,水合,frontend,"[""ssr"", ""react"", ""dom""]",translate,服务端HTML绑定交互状态,ai,manual
+polyfill,垫片,frontend,"[""browser"", ""compat""]",keep,为旧浏览器补齐API的兼容代码,ai,manual
+hot reload,热更新,frontend,"[""dev"", ""vite"", ""module""]",translate,不重启刷新变更,ai,manual
+bundler,打包器,frontend,"[""webpack"", ""vite"", ""rollup""]",translate,将模块合并为产物的工具,ai,manual
+reactive,响应式,frontend,"[""vue"", ""signal"", ""state""]",translate,数据变化自动驱动更新,ai,vue-rules
+watcher,侦听器,frontend,"[""reactive"", ""vue"", ""effect""]",translate,响应式数据变化的观察者,ai,vue-rules
+slot,插槽,frontend,"[""vue"", ""template"", ""content""]",translate,组件模板内容占位机制,ai,vue-rules
+side effect,副作用,frontend,"[""react"", ""effect"", ""mutation""]",translate,函数执行对外部状态的改变,ai,vue-rules
+ref,引用,frontend,"[""vue"", ""dom"", ""node""]",keep,响应式引用/DOM引用,ai,vue-rules
+proxy,代理,network,"[""http"", ""forward"", ""tunnel""]",translate,转发请求的中间人；ES6 Proxy保留英文,ai,vue-rules
+webhook,回调钩子,backend,"[""http"", ""event"", ""push""]",keep,事件驱动的HTTP回调,ai,manual
+deploy,部署,devops,"[""production"", ""pipeline"", ""release""]",translate,将软件发布到运行环境,ai,manual
+rollback,回滚,devops,"[""deploy"", ""release"", ""git""]",translate,恢复到之前版本,ai,manual
+pipeline,流水线,devops,"[""ci"", ""cd"", ""build""]",translate,自动化的构建-测试-发布链,ai,manual
+retry,重试,devops,"[""backoff"", ""timeout"", ""failure""]",translate,失败后再次尝试,ai,manual
+fallback,兜底,general,"[""retry"", ""degradation"", ""default""]",translate,主路径失败时的替代方案,ai,manual
+degradation,降级,devops,"[""fallback"", ""failure"", ""graceful""]",translate,故障时提供部分功能的策略,ai,manual
+latency,延迟,general,"[""p95"", ""response"", ""performance""]",translate,响应耗时,ai,manual
+throughput,吞吐量,general,"[""qps"", ""performance"", ""benchmark""]",translate,单位时间处理量,ai,manual
+observability,可观测性,devops,"[""metrics"", ""logs"", ""traces""]",translate,通过外部输出理解系统内部状态,ai,manual
+tracing,链路追踪,devops,"[""otel"", ""span"", ""trace""]",translate,跨服务请求链路记录,ai,manual
+telemetry,遥测,general,"[""metrics"", ""trace"", ""log""]",translate,运行时数据采集,ai,manual
+profiling,性能剖析,devops,"[""cpu"", ""memory"", ""hotspot""]",translate,定位性能热点的过程,ai,manual
+flame graph,火焰图,devops,"[""profile"", ""performance"", ""cpu""]",translate,性能剖析可视化,ai,manual
+cold start,冷启动,devops,"[""serverless"", ""cache"", ""init""]",translate,无预热时的首次启动开销,ai,manual
+benchmark,基准测试,general,"[""model"", ""score"", ""eval""]",translate,标准化评测集与指标,ai,manual
+eval,评测,llm,"[""benchmark"", ""dataset"", ""score""]",keep,evaluation简称,ai,manual
+quantization,量化,llm,"[""int8"", ""fp8"", ""gguf"", ""model""]",translate,降低数值精度压缩模型,ai,dongshuyan-llm
+distillation,蒸馏,llm,"[""teacher"", ""student"", ""compression""]",translate,用大模型输出训练小模型,ai,dongshuyan-llm
+checkpoint,检查点,llm,"[""training"", ""save"", ""snapshot""]",translate,训练过程保存的模型参数版本,ai,dongshuyan-llm
+checkpointing,快照检查点,llm,"[""resume"", ""agent"", ""state""]",translate,可随时恢复的执行点记录,ai,manual
+temperature,温度,llm,"[""sampling"", ""randomness"", ""top-p""]",translate,控制输出随机性的参数,ai,dongshuyan-llm
+chunking,分块,llm,"[""rag"", ""embedding"", ""document""]",translate,将文档切分为检索单元,ai,dongshuyan-llm
+rerank,重排序,llm,"[""retrieval"", ""cross-encoder"", ""top-k""]",translate,对初检结果按相关性精细排序,ai,dongshuyan-llm
+chunk,数据块,llm,"[""stream"", ""split"", ""batch""]",translate,传输或切分的单元,ai,manual
+scaffold,脚手架,general,"[""cli"", ""template"", ""init""]",translate,项目结构生成工具,ai,manual
+vendor,第三方依赖,general,"[""lock"", ""package"", ""code""]",keep,外部引入的依赖代码,ai,manual
+sandbox,沙箱,security,"[""execution"", ""isolation"", ""container""]",translate,隔离受限的执行环境,ai,manual
+vibe coding,氛围编程,general,"[""ai coding"", ""llm assisted""]",translate,AI辅助以对话驱动的快速编程方式,ai,manual
+copilot,副驾驶,general,"[""github"", ""ide"", ""agent""]",keep,GitHub Copilot等产品名,ai,manual
