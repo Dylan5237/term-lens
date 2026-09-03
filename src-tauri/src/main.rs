@@ -13,6 +13,31 @@ use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 
 const DB_NAME: &str = "terms.db";
 
+// 单实例保护: 先抢命名互斥体, 已有人持有则本进程立即退出
+// (防止开机自启+手动双击撞车 → 悬浮窗双开/热键失效); CLI 子命令设 TERMLENS_CLI=1 跳过
+fn ensure_single_instance() {
+    if std::env::var("TERMLENS_CLI").is_ok() {
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        #[allow(deprecated)]
+        unsafe {
+            let name: Vec<u16> = OsStr::new("Local\\TermLens-Main").encode_wide().chain(std::iter::once(0)).collect();
+            let _handle = windows::Win32::System::Threading::CreateMutexW(
+                None,
+                false,
+                windows::core::PCWSTR(name.as_ptr()),
+            );
+            if windows::Win32::Foundation::ERROR_ALREADY_EXISTS == windows::Win32::Foundation::GetLastError() {
+                std::process::exit(0);
+            }
+        }
+    }
+}
+
 // ---------- 配置 ----------
 
 #[derive(Debug, Deserialize)]
@@ -654,32 +679,42 @@ fn grab_selection_and_show(app: &AppHandle) {
 }
 
 fn main() {
+    // CLI 子命令先于互斥体判断
+    let arg = std::env::args().nth(1).unwrap_or_default();
+    let is_cli = matches!(arg.as_str(), "--export" | "--stats" | "--rescan");
+    if is_cli {
+        std::env::set_var("TERMLENS_CLI", "1");
+    }
+    ensure_single_instance();
+
     let db_path = data_dir().join(DB_NAME);
     let conn = init_db(&db_path);
     let seeded = seed_if_empty(&conn);
     if seeded > 0 {
         println!("[term-lens] seeded {seeded} terms");
     }
-
-    // 命令行子模式: --export / --stats / --rescan（不开窗口直接操作 DB 后退出）
-    let arg = std::env::args().nth(1).unwrap_or_default();
-    if arg == "--export" {
-        let out = export_db(&conn);
-        println!("exported -> {out}");
-        return;
+    // 启动即落盘配置与提示词文件, 保证"可配置"立刻可见
+    if is_cli {
+        if arg == "--export" {
+            let out = export_db(&conn);
+            println!("exported -> {out}");
+            return;
+        }
+        if arg == "--stats" {
+            let s = stats_db(&conn);
+            println!("{s:#}");
+            return;
+        }
+        if arg == "--rescan" {
+            // 重导种子/外部 CSV: term-lens --rescan <path.csv>
+            let path = std::env::args().nth(2).map(PathBuf::from).unwrap_or(data_dir().join("seed_terms.csv"));
+            let n = import_csv(&conn, &path);
+            println!("imported {n} rows from {}", path.display());
+            return;
+        }
     }
-    if arg == "--stats" {
-        let s = stats_db(&conn);
-        println!("{s:#}");
-        return;
-    }
-    if arg == "--rescan" {
-        // 重导种子/外部 CSV: term-lens --rescan <path.csv>
-        let path = std::env::args().nth(2).map(PathBuf::from).unwrap_or(data_dir().join("seed_terms.csv"));
-        let n = import_csv(&conn, &path);
-        println!("imported {n} rows from {}", path.display());
-        return;
-    }
+    load_config();
+    load_prompt();
 
     // 系统代理绕过: reqwest 默认读 http_proxy(本机 Clash 会劫持 localhost), 必须关掉
     let client = reqwest::Client::builder()
