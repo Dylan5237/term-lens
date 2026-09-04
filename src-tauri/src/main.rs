@@ -1,6 +1,9 @@
 // Term Lens — AI 输出中英混杂术语实时注释工具 (Windows MVP)
 // 设计依据: ../DESIGN.md §0 第一性原理锚点 (P1-P4, H1-H2)
 
+// release 构建以窗口子系统运行(无黑框); CLI 子命令启动时再 AttachConsole 回终端
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use enigo::{Enigo, Keyboard, Settings as EnigoSettings};
 use regex::Regex;
 use rusqlite::Connection;
@@ -851,6 +854,17 @@ fn main() {
     }
     ensure_single_instance();
 
+    // CLI 模式: 窗口子系统下 stdout 不接终端, 需在任何 println 前 AttachConsole 回父终端
+    #[cfg(target_os = "windows")]
+    {
+        if is_cli {
+            use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+            unsafe {
+                let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+            }
+        }
+    }
+
     let db_path = data_dir().join(DB_NAME);
     let conn = init_db(&db_path);
     let seeded = seed_if_empty(&conn);
@@ -877,28 +891,20 @@ fn main() {
             return;
         }
     }
-    load_config();
-    load_prompt();
-
-    // GUI 模式隐藏控制台窗口 (explorer/Run 键启动时不闪黑框; CLI 模式保留 stdout)
-    #[cfg(target_os = "windows")]
+    // GUI 模式: 窗口子系统本无黑框; debug 构建(控制台子系统)时隐藏
+    #[cfg(all(target_os = "windows", debug_assertions))]
     {
-        use windows::Win32::System::Console::{
-            AttachConsole, FreeConsole, GetConsoleWindow, ATTACH_PARENT_PROCESS,
-        };
+        use windows::Win32::System::Console::GetConsoleWindow;
         use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
         unsafe {
-            // 若控制台来自父进程(我们在终端里启动 GUI), 不隐藏; 否则隐藏独立黑框
-            if AttachConsole(ATTACH_PARENT_PROCESS).is_ok() {
-                let _ = FreeConsole();
-            } else {
-                let hwnd = GetConsoleWindow();
-                if !hwnd.is_invalid() {
-                    let _ = ShowWindow(hwnd, SW_HIDE);
-                }
+            let hwnd = GetConsoleWindow();
+            if !hwnd.is_invalid() {
+                let _ = ShowWindow(hwnd, SW_HIDE);
             }
         }
     }
+    load_config();
+    load_prompt();
 
     // 系统代理绕过: reqwest 默认读 http_proxy(本机 Clash 会劫持 localhost), 必须关掉
     let client = reqwest::Client::builder()
