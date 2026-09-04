@@ -64,6 +64,8 @@ struct ProviderCfg {
 struct UiCfg {
     popup_width: f64,
     popup_height: f64,
+    /// "cursor" = 跟随鼠标(默认); "fixed" = 固定屏幕右下角
+    position: String,
 }
 
 impl Default for Config {
@@ -85,7 +87,7 @@ impl Default for ProviderCfg {
 }
 impl Default for UiCfg {
     fn default() -> Self {
-        UiCfg { popup_width: 360.0, popup_height: 230.0 }
+        UiCfg { popup_width: 360.0, popup_height: 230.0, position: "cursor".into() }
     }
 }
 
@@ -141,7 +143,9 @@ fn load_config() -> Config {
          context_chars = 0\n\n\
          [ui]\n\
          popup_width = 360.0\n\
-         popup_height = 230.0\n",
+         popup_height = 230.0\n\
+         # \"cursor\"=跟随鼠标(默认)  \"fixed\"=固定屏幕右下角\n\
+         position = \"cursor\"\n",
     );
     fs::read_to_string(&path)
         .ok()
@@ -210,8 +214,11 @@ fn layer_rank(layer: &str) -> i32 {
 }
 
 fn row_to_term(row: &rusqlite::Row) -> rusqlite::Result<Term> {
-    let hints: String = row.get(4)?;
-    let ctx_hints: Vec<String> = serde_json::from_str(&hints).unwrap_or_default();
+    // ctx_hints 可能为 NULL (adopt/fix 未填该列) —— 必须按 Option 读, 否则整行被静默丢弃
+    let hints: Option<String> = row.get(4)?;
+    let ctx_hints: Vec<String> = hints
+        .and_then(|h| serde_json::from_str(&h).ok())
+        .unwrap_or_default();
     Ok(Term {
         en: row.get(0)?,
         zh: row.get(1)?,
@@ -712,12 +719,32 @@ fn grab_selection_and_show(app: &AppHandle) {
 
     let terms = extract_terms(&selected);
     let app2 = app.clone();
-    let (x, y) = get_cursor_pos();
+    let (px, py) = get_cursor_pos(); // 物理像素
+    let fixed = load_config().ui.position == "fixed";
     let win: Option<WebviewWindow> = app2.get_webview_window("main");
 
     tauri::async_runtime::spawn(async move {
         if let Some(w) = win {
-            let _ = w.set_position(tauri::LogicalPosition::new(x + 8.0, y + 12.0));
+            let scale = w.scale_factor().unwrap_or(1.0);
+            let (pw, ph) = w.outer_size()
+                .map(|s| (s.width as f64, s.height as f64))
+                .unwrap_or((360.0 * scale, 230.0 * scale));
+            let (sw, sh) = w.primary_monitor().ok().flatten()
+                .map(|m| {
+                    let sz = m.size();
+                    (sz.width as f64, sz.height as f64)
+                })
+                .unwrap_or((1920.0 * scale, 1080.0 * scale));
+            // 目标物理坐标: fixed=右下角(留边距), cursor=鼠标右下偏移
+            let (fx, fy) = if fixed {
+                (sw - pw - 24.0 * scale, sh - ph - 60.0 * scale)
+            } else {
+                (px + 8.0 * scale, py + 16.0 * scale)
+            };
+            // 夹取到屏幕内, 再换算为逻辑像素 (高 DPI 屏上物理/逻辑混用会跑偏)
+            let cx = fx.max(0.0).min((sw - pw).max(0.0)) / scale;
+            let cy = fy.max(0.0).min((sh - ph).max(0.0)) / scale;
+            let _ = w.set_position(tauri::LogicalPosition::new(cx, cy));
             let _ = w.emit("terms-requested", &terms);
             let _ = w.show();
             let _ = w.set_focus();
