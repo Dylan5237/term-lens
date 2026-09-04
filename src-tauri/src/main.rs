@@ -77,7 +77,7 @@ impl Default for ProviderCfg {
             base_url: "http://127.0.0.1:10100/v1".into(),
             api_key: "opencodex-local".into(),
             model: "opencode-go/deepseek-v4-flash".into(),
-            timeout_ms: 3000,
+            timeout_ms: 8000,
             send_context: false, // H1
             context_chars: 0,
         }
@@ -136,7 +136,7 @@ fn load_config() -> Config {
          base_url = \"http://127.0.0.1:10100/v1\"\n\
          api_key = \"opencodex-local\"\n\
          model = \"opencode-go/deepseek-v4-flash\"\n\
-         timeout_ms = 3000\n\
+         timeout_ms = 8000\n\
          send_context = false\n\
          context_chars = 0\n\n\
          [ui]\n\
@@ -414,7 +414,7 @@ async fn cloud_lookup(client: &reqwest::Client, en: &str) -> Result<Option<Term>
         .timeout(std::time::Duration::from_millis(cfg.provider.timeout_ms))
         .send()
         .await
-        .map_err(|e| format!("请求失败: {e}"))?;
+        .map_err(|e| format!("请求失败: {}", err_chain(&e)))?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
@@ -631,7 +631,42 @@ fn get_cursor_pos() -> (f64, f64) {
     (400.0, 300.0)
 }
 
+/// 等待 Alt/Ctrl 修饰键物理释放 (热键触发时 Alt 还按着, 直接发 Ctrl+C 会变成 Alt+Ctrl+C 导致复制失败)
+fn wait_modifiers_released() {
+    #[cfg(target_os = "windows")]
+    {
+        use std::time::Instant;
+        let t0 = Instant::now();
+        while t0.elapsed().as_millis() < 500 {
+            #[allow(deprecated)]
+            let down = unsafe {
+                use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU};
+                (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000 != 0)
+                    || (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0)
+            };
+            if !down {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}
+
+/// reqwest 错误链展开, 便于定位连接层根因
+fn err_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut s = e.to_string();
+    let mut src = e.source();
+    while let Some(x) = src {
+        s.push_str(&format!(" | {x}"));
+        src = x.source();
+    }
+    s
+}
+
 fn grab_selection_and_show(app: &AppHandle) {
+    // 0. 等修饰键松开
+    wait_modifiers_released();
+
     // 1. 保存剪贴板快照
     let saved = arboard::Clipboard::new()
         .and_then(|mut c| c.get_text())
@@ -644,12 +679,24 @@ fn grab_selection_and_show(app: &AppHandle) {
     enigo.key(enigo::Key::Unicode('c'), Press);
     enigo.key(enigo::Key::Unicode('c'), Release);
     enigo.key(enigo::Key::Control, Release);
-    std::thread::sleep(std::time::Duration::from_millis(120));
 
-    // 3. 读新剪贴板
-    let selected = arboard::Clipboard::new()
-        .and_then(|mut c| c.get_text())
-        .unwrap_or_default();
+    // 3. 轮询读新剪贴板 (最多 400ms, 慢应用复制有延迟)
+    let mut selected = String::new();
+    for _ in 0..13 {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let cur = arboard::Clipboard::new()
+            .and_then(|mut c| c.get_text())
+            .unwrap_or_default();
+        if cur != saved.clone().unwrap_or_default() {
+            selected = cur;
+            break;
+        }
+        if saved.is_none() && !cur.is_empty() {
+            selected = cur;
+            break;
+        }
+        selected = cur; // 兜底: 剪贴板没变也用当前值
+    }
 
     // 4. 恢复剪贴板 (P1: 不污染用户复制)
     if let Some(old) = saved {
