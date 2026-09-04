@@ -149,7 +149,10 @@ fn load_config() -> Config {
     write_if_absent(
         &path,
         "# Term Lens 配置 (修改后自动生效: 每次兜底请求时重读)\n\
-         # H1 硬约束: send_context 默认 false, 仅传术语单词; 开启前请确认合规\n\n\
+         # H1 硬约束: send_context 默认 false, 仅传术语单词; 开启前请确认合规\n\
+         # 云端兜底可接任意 OpenAI 兼容 API: 改 base_url/model/api_key 即可\n\
+         #   例: base_url = \"https://api.deepseek.com/v1\"  model = \"deepseek-chat\"\n\
+         # 没有可用 API 也能用: 仅本地词表, 兜底会显示离线徽标\n\n\
          [provider]\n\
          base_url = \"http://127.0.0.1:10100/v1\"\n\
          api_key = \"opencodex-local\"\n\
@@ -311,6 +314,10 @@ fn upsert(conn: &Connection, t: &Term) {
     .ok();
 }
 
+// 种子词库编译期内嵌 (分享版无仓库路径也能完整初始化)
+const SEED_CLASSIC: &str = include_str!("../../data/seed_terms.csv");
+const SEED_AI: &str = include_str!("../../data/ai_terms_latest.csv");
+
 fn seed_if_empty(conn: &Connection) -> usize {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM terms", [], |r| r.get(0))
@@ -318,24 +325,14 @@ fn seed_if_empty(conn: &Connection) -> usize {
     if count > 0 {
         return 0;
     }
-    let path = data_dir().join("seed_terms.csv");
-    if !path.exists() {
-        // 仓库内种子文件优先
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../data/seed_terms.csv");
-        if repo.exists() {
-            fs::copy(&repo, &path).ok();
-        }
-    }
-    if !path.exists() {
-        return 0;
-    }
-    let content = fs::read_to_string(&path).unwrap_or_default();
+    // 落盘一份到数据目录 (便于用户查看/编辑), 但入库读内嵌内容
+    let _ = fs::write(data_dir().join("seed_terms.csv"), format!("{SEED_CLASSIC}{SEED_AI}"));
     let mut n = 0usize;
-    for line in content.lines().skip(1) {
+    for line in SEED_CLASSIC.lines().skip(1).chain(SEED_AI.lines().skip(1)) {
         if line.trim().is_empty() {
             continue;
         }
-        // CSV: en,zh,domain,ctx_hints(json),keep_policy,note,layer,source  (note 内允许逗号, 用简单解析)
+        // CSV: en,zh,domain,ctx_hints(json),keep_policy,note,layer,source
         if let Some(t) = parse_seed_line(line) {
             upsert(conn, &t);
             n += 1;

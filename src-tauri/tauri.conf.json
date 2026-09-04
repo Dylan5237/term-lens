@@ -29,8 +29,16 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all",
-    "icon": ["icons/icon.ico"]
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper" },
+      "nsis": {
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": false,
+        "installMode": "currentUser"
+      }
+    }
   }
 }
