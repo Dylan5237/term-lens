@@ -494,8 +494,17 @@ fn now_ms() -> u64 {
 }
 
 #[cfg(target_os = "windows")]
+fn tl_log(msg: &str) {
+    use std::io::Write;
+    let path = data_dir().join("term-lens.log");
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{} {}", now_ms(), msg);
+    }
+}
+
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn ll_hook_proc(code: i32, wparam: windows::Win32::Foundation::WPARAM, lparam: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT {
-    use windows::Win32::UI::Input::KeyboardAndMouse::VK_CONTROL;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_LCONTROL, VK_RCONTROL};
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, WM_KEYUP,
     };
@@ -503,7 +512,10 @@ unsafe extern "system" fn ll_hook_proc(code: i32, wparam: windows::Win32::Founda
         let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
         // 跳过注入事件: 我们自己模拟的 Ctrl+C 不能触发钩子 (否则复制→又触发→死循环)
         let injected = (kb.flags.0 & LLKHF_INJECTED.0) != 0;
-        if !injected && kb.vkCode == VK_CONTROL.0 as u32 && wparam.0 as u32 == WM_KEYUP {
+        // 低级钩子报告具体的左右键码 (VK_LCONTROL/VK_RCONTROL), 通用 VK_CONTROL 收不到左 Ctrl
+        let vk = kb.vkCode;
+        let is_ctrl = vk == VK_LCONTROL.0 as u32 || vk == VK_RCONTROL.0 as u32 || vk == VK_CONTROL.0 as u32;
+        if !injected && is_ctrl && wparam.0 as u32 == WM_KEYUP {
             let now = now_ms();
             let last = LAST_CTRL_UP.swap(now, Ordering::SeqCst);
             // 连按三次(第三下距触发<350ms)不重复触发
@@ -512,6 +524,7 @@ unsafe extern "system" fn ll_hook_proc(code: i32, wparam: windows::Win32::Founda
                 LAST_CTRL_UP.store(0, Ordering::SeqCst);
                 let app = HOOK_APP.lock().unwrap().clone();
                 if let Some(app) = app {
+                    tl_log("double_ctrl triggered");
                     // 钩子回调里不能做耗时操作(阻塞全局输入), 丢给独立线程
                     std::thread::spawn(move || grab_selection_and_show(&app));
                 }
@@ -539,6 +552,7 @@ fn start_double_ctrl_hook(app: AppHandle) {
             );
             match hook {
                 Ok(_h) => {
+                    tl_log("hook installed, pumping");
                     let mut msg = MSG::default();
                     // 消息泵: 低级钩子回调依赖安装线程持续泵消息
                     while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -546,7 +560,7 @@ fn start_double_ctrl_hook(app: AppHandle) {
                         DispatchMessageW(&msg);
                     }
                 }
-                Err(e) => eprintln!("[term-lens] 键盘钩子安装失败: {e}"),
+                Err(e) => tl_log(&format!("hook install FAILED: {e}")),
             }
         }
     });
