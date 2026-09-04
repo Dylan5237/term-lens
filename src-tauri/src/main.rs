@@ -95,7 +95,7 @@ impl Default for ProviderCfg {
             base_url: "http://127.0.0.1:10100/v1".into(),
             api_key: "opencodex-local".into(),
             model: "opencode-go/deepseek-v4-flash".into(),
-            timeout_ms: 8000,
+            timeout_ms: 15000,
             send_context: false, // H1
             context_chars: 0,
         }
@@ -154,7 +154,7 @@ fn load_config() -> Config {
          base_url = \"http://127.0.0.1:10100/v1\"\n\
          api_key = \"opencodex-local\"\n\
          model = \"opencode-go/deepseek-v4-flash\"\n\
-         timeout_ms = 8000\n\
+         timeout_ms = 15000\n\
          send_context = false\n\
          context_chars = 0\n\n\
          [ui]\n\
@@ -690,12 +690,19 @@ fn import_csv(conn: &Connection, path: &PathBuf) -> usize {
     for line in content.lines().skip(1) {
         if line.trim().is_empty() { continue; }
         if let Some(t) = parse_seed_line(line) {
-            let mut t = t;
-            if t.layer != "personal" {
-                // 外部导入不得覆盖用户裁决
-                upsert(conn, &{ t.status = "active".into(); t });
-                n += 1;
+            if t.layer == "personal" {
+                continue; // 外部导入永远不得写入/覆盖个人裁决层
             }
+            // 已存在则跳过 (防新库译名覆盖旧裁决, 如 token→词元); 只增不改
+            let exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM terms WHERE en=?1 AND domain=?2 AND layer=?3",
+                rusqlite::params![t.en.to_lowercase(), t.domain, t.layer],
+                |r| r.get(0)).unwrap_or(0);
+            if exists > 0 { continue; }
+            let mut t = t;
+            t.status = "active".into();
+            upsert(conn, &t);
+            n += 1;
         }
     }
     n
