@@ -880,6 +880,26 @@ fn main() {
     load_config();
     load_prompt();
 
+    // GUI 模式隐藏控制台窗口 (explorer/Run 键启动时不闪黑框; CLI 模式保留 stdout)
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::System::Console::{
+            AttachConsole, FreeConsole, GetConsoleWindow, ATTACH_PARENT_PROCESS,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+        unsafe {
+            // 若控制台来自父进程(我们在终端里启动 GUI), 不隐藏; 否则隐藏独立黑框
+            if AttachConsole(ATTACH_PARENT_PROCESS).is_ok() {
+                let _ = FreeConsole();
+            } else {
+                let hwnd = GetConsoleWindow();
+                if !hwnd.is_invalid() {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
+            }
+        }
+    }
+
     // 系统代理绕过: reqwest 默认读 http_proxy(本机 Clash 会劫持 localhost), 必须关掉
     let client = reqwest::Client::builder()
         .no_proxy()
