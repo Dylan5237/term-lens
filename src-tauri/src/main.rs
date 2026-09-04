@@ -45,6 +45,14 @@ fn ensure_single_instance() {
 struct Config {
     provider: ProviderCfg,
     ui: UiCfg,
+    hotkey: HotkeyCfg,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct HotkeyCfg {
+    /// "double_ctrl" = 双击 Ctrl (默认) | "alt_t" = Alt+T
+    mode: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,7 +78,12 @@ struct UiCfg {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { provider: ProviderCfg::default(), ui: UiCfg::default() }
+        Config { provider: ProviderCfg::default(), ui: UiCfg::default(), hotkey: HotkeyCfg::default() }
+    }
+}
+impl Default for HotkeyCfg {
+    fn default() -> Self {
+        HotkeyCfg { mode: "double_ctrl".into() }
     }
 }
 impl Default for ProviderCfg {
@@ -145,7 +158,10 @@ fn load_config() -> Config {
          popup_width = 360.0\n\
          popup_height = 230.0\n\
          # \"cursor\"=跟随鼠标(默认)  \"fixed\"=固定屏幕右下角\n\
-         position = \"cursor\"\n",
+         position = \"cursor\"\n\n\
+         [hotkey]\n\
+         # \"double_ctrl\"=双击Ctrl(默认)  \"alt_t\"=Alt+T\n\
+         mode = \"double_ctrl\"\n",
     );
     fs::read_to_string(&path)
         .ok()
@@ -457,6 +473,80 @@ async fn cloud_lookup(client: &reqwest::Client, en: &str) -> Result<Option<Term>
         source: "cloud-adopted".into(),
         status: "pending".into(), // 云端必经确认, 防幻觉污染
     }))
+}
+
+// ---------- 双击 Ctrl 低级键盘钩子 ----------
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static LAST_CTRL_UP: AtomicU64 = AtomicU64::new(0);
+static TRIGGER_AT: AtomicU64 = AtomicU64::new(0);
+static HOOK_APP: Mutex<Option<AppHandle>> = Mutex::new(None);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn ll_hook_proc(code: i32, wparam: windows::Win32::Foundation::WPARAM, lparam: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::UI::Input::KeyboardAndMouse::VK_CONTROL;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, WM_KEYUP,
+    };
+    if code >= 0 {
+        let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+        // 跳过注入事件: 我们自己模拟的 Ctrl+C 不能触发钩子 (否则复制→又触发→死循环)
+        let injected = (kb.flags.0 & LLKHF_INJECTED.0) != 0;
+        if !injected && kb.vkCode == VK_CONTROL.0 as u32 && wparam.0 as u32 == WM_KEYUP {
+            let now = now_ms();
+            let last = LAST_CTRL_UP.swap(now, Ordering::SeqCst);
+            // 连按三次(第三下距触发<350ms)不重复触发
+            if last != 0 && now - last < 350 && now - TRIGGER_AT.load(Ordering::SeqCst) > 350 {
+                TRIGGER_AT.store(now, Ordering::SeqCst);
+                LAST_CTRL_UP.store(0, Ordering::SeqCst);
+                let app = HOOK_APP.lock().unwrap().clone();
+                if let Some(app) = app {
+                    // 钩子回调里不能做耗时操作(阻塞全局输入), 丢给独立线程
+                    std::thread::spawn(move || grab_selection_and_show(&app));
+                }
+            }
+        }
+    }
+    CallNextHookEx(HHOOK(std::ptr::null_mut()), code, wparam, lparam)
+}
+
+#[cfg(target_os = "windows")]
+fn start_double_ctrl_hook(app: AppHandle) {
+    std::thread::spawn(move || {
+        use windows::Win32::Foundation::HINSTANCE;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage, MSG,
+            WH_KEYBOARD_LL,
+        };
+        *HOOK_APP.lock().unwrap() = Some(app);
+        unsafe {
+            let hook = SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                Some(ll_hook_proc),
+                HINSTANCE(std::ptr::null_mut()),
+                0,
+            );
+            match hook {
+                Ok(_h) => {
+                    let mut msg = MSG::default();
+                    // 消息泵: 低级钩子回调依赖安装线程持续泵消息
+                    while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                }
+                Err(e) => eprintln!("[term-lens] 键盘钩子安装失败: {e}"),
+            }
+        }
+    });
 }
 
 // ---------- Tauri 命令 ----------
@@ -802,14 +892,13 @@ fn main() {
         client,
     };
 
+    let mode = load_config().hotkey.mode.clone();
     let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::KeyT);
 
     tauri::Builder::default()
         .manage(state)
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcuts([shortcut])
-                .expect("invalid shortcut")
                 .with_handler(move |app, _sc, ev| {
                     if ev.state() == ShortcutState::Pressed {
                         grab_selection_and_show(app);
@@ -817,6 +906,16 @@ fn main() {
                 })
                 .build(),
         )
+        .setup(move |app| {
+            use tauri_plugin_global_shortcut::GlobalShortcutExt;
+            if mode == "alt_t" {
+                let _ = app.global_shortcut().register(shortcut);
+            } else {
+                #[cfg(target_os = "windows")]
+                start_double_ctrl_hook(app.handle().clone());
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             lookup, fallback, adopt, fix, reject, export_terms, stats
         ])
