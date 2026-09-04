@@ -258,8 +258,8 @@ fn lookup_local(conn: &Connection, en: &str) -> Vec<Term> {
     let key = en.to_lowercase();
     let mut stmt = conn
         .prepare(&format!(
-            "{SELECT_COLS} WHERE (en = ?1 OR en_variants LIKE '%\"' || ?1 || '\"%') AND status='active' \
-             ORDER BY hit_count DESC"
+            "{SELECT_COLS} WHERE (en = ?1 OR en_variants LIKE '%\"' || ?1 || '\"%') AND status IN ('active','pending') \
+             ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, hit_count DESC"
         ))
         .unwrap();
     let rows = stmt
@@ -433,49 +433,69 @@ async fn cloud_lookup(client: &reqwest::Client, en: &str) -> Result<Option<Term>
         max_tokens: Some(300),
     };
     let url = format!("{}/chat/completions", cfg.provider.base_url.trim_end_matches('/'));
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", cfg.provider.api_key))
-        .json(&body)
-        .timeout(std::time::Duration::from_millis(cfg.provider.timeout_ms))
-        .send()
-        .await
-        .map_err(|e| format!("请求失败: {}", err_chain(&e)))?;
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
+    // 上游路由偶发慢响应: 失败自动重试一次, 平滑超时尖峰
+    let mut last_err = String::new();
+    for attempt in 0..2 {
+        let r = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", cfg.provider.api_key))
+            .json(&body)
+            .timeout(std::time::Duration::from_millis(cfg.provider.timeout_ms))
+            .send()
+            .await;
+        match r {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    last_err = format!("HTTP {}", resp.status());
+                    continue;
+                }
+                let v: serde_json::Value = match resp.json().await {
+                    Ok(v) => v,
+                    Err(e) => { last_err = format!("响应解析失败: {e}"); continue; }
+                };
+                let content = match v["choices"][0]["message"]["content"].as_str() {
+                    Some(s) => s.to_string(),
+                    None => { last_err = "响应格式错误".into(); continue; }
+                };
+                // 提取 JSON (容忍包裹 ```json)
+                let json_str = match content
+                    .find('{')
+                    .and_then(|i| content[i..].rfind('}').map(|j| &content[i..i + j + 1]))
+                {
+                    Some(s) => s,
+                    None => { last_err = "无 JSON".into(); continue; }
+                };
+                #[derive(Deserialize)]
+                struct CloudTerm {
+                    zh: String,
+                    #[serde(default)]
+                    domain: String,
+                    #[serde(default)]
+                    note: String,
+                    #[serde(default)]
+                    keep_policy: String,
+                }
+                let ct: CloudTerm = match serde_json::from_str(json_str) {
+                    Ok(t) => t,
+                    Err(e) => { last_err = format!("JSON 解析失败: {e}"); continue; }
+                };
+                let _ = attempt;
+                return Ok(Some(Term {
+                    en: en.to_string(),
+                    zh: ct.zh,
+                    domain: if ct.domain.is_empty() { "general".into() } else { ct.domain },
+                    ctx_hints: vec![],
+                    keep_policy: if ct.keep_policy.is_empty() { "translate".into() } else { ct.keep_policy },
+                    note: ct.note,
+                    layer: "personal".into(),
+                    source: "cloud-adopted".into(),
+                    status: "pending".into(), // 云端必经确认, 防幻觉污染
+                }));
+            }
+            Err(e) => { last_err = format!("请求失败: {}", err_chain(&e)); continue; }
+        }
     }
-    let v: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let content = v["choices"][0]["message"]["content"]
-        .as_str()
-        .ok_or("响应格式错误")?
-        .to_string();
-    // 提取 JSON (容忍包裹 ```json)
-    let json_str = content
-        .find('{')
-        .and_then(|i| content[i..].rfind('}').map(|j| &content[i..i + j + 1]))
-        .ok_or("无 JSON")?;
-    #[derive(Deserialize)]
-    struct CloudTerm {
-        zh: String,
-        #[serde(default)]
-        domain: String,
-        #[serde(default)]
-        note: String,
-        #[serde(default)]
-        keep_policy: String,
-    }
-    let ct: CloudTerm = serde_json::from_str(json_str).map_err(|e| format!("JSON 解析失败: {e}"))?;
-    Ok(Some(Term {
-        en: en.to_string(),
-        zh: ct.zh,
-        domain: if ct.domain.is_empty() { "general".into() } else { ct.domain },
-        ctx_hints: vec![],
-        keep_policy: if ct.keep_policy.is_empty() { "translate".into() } else { ct.keep_policy },
-        note: ct.note,
-        layer: "personal".into(),
-        source: "cloud-adopted".into(),
-        status: "pending".into(), // 云端必经确认, 防幻觉污染
-    }))
+    Err(last_err)
 }
 
 // ---------- 双击 Ctrl 低级键盘钩子 ----------
@@ -613,7 +633,12 @@ async fn fallback(app: AppHandle, en: String) -> Result<FallbackResp, String> {
     let client = st.client.clone();
     let r = cloud_lookup(&client, &en).await;
     Ok(match r {
-        Ok(Some(t)) => FallbackResp { result: Some(t), offline: false, error: None },
+        Ok(Some(t)) => {
+            // 云端结果落库为 pending: 同词再查直接本地命中"待确认", 不重复打云端 (DESIGN §pending 语义)
+            let conn = st.db.lock().unwrap();
+            upsert(&conn, &t);
+            FallbackResp { result: Some(t), offline: false, error: None }
+        }
         Ok(None) => FallbackResp { result: None, offline: false, error: None },
         Err(e) => FallbackResp { result: None, offline: true, error: Some(e) },
     })
