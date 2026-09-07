@@ -1,8 +1,8 @@
 # Term Lens 🐾
 
-**AI 输出中英混杂术语 · 实时注释小工具（Windows）**
+**Windows 托盘划词注释器**（不是终端透镜）。vibe coding 时 AI 爱冒英文术语？划选文本，双击 `Ctrl`，鼠标旁立刻弹出人话注释。
 
- vibe coding 时 AI 爱冒英文术语？划选文本，双击 `Ctrl`，鼠标旁立刻弹出人话注释。
+> **产品冻结**：不支持终端取词。取词靠模拟复制；剪贴板相对快照没变就失败，绝不拿旧内容去查、更不上云。默认无云端；没配好 loopback / https 白名单就不发外网。密钥走 Windows 凭据管理器，不要写进 `config.toml`。
 
 ```
 "独立 smoke 的 Runtime 链路已走到预期受控失败"
@@ -23,68 +23,92 @@
 
 ## 核心特性
 
-- **两级流水线**：本地 SQLite 术语表（<200ms，内置 160+ 条 AI/IT 通行译法）→ 未命中走云端 LLM 兜底（~3s）
-- **裁决闭环**：✅采纳 / ✏️修改 / ❌否决 三键。云端结果先落"待确认"，你确认后才转正——防幻觉词污染词库
-- **一词多译**：token 在 LLM 语境→词元、安全语境→令牌，按划选上下文自动选域
-- **越用越快**：兜底结果自动沉淀，同一个词第二次秒出
-- **隐私优先**：兜底默认**只上传术语单词本身**，不上传你划选的上下文；个人裁决层永不外发
-- **系统托盘**：托盘图标右键菜单按「词库 / 提示词 / 大模型连接 / 界面与热键」分组，查看统计、测试连接、切换热键与弹窗位置全都即点即生效，无需重启
-- **一切可配置**：`%APPDATA%\term-lens\config.toml` 改模型/超时/热键，`fallback_prompt.md` 改提示词，保存即生效
+- **两级流水线**：本地 SQLite 术语表（<200ms，内置 AI/IT 通行译法）→ 未命中且已配置合法 endpoint 才走云端兜底（默认 3s）
+- **裁决闭环**：✅采纳 / ✏️修改 / ❌否决。云端结果先落「待确认」，你确认后才转正。否决只伤个人层，种子「词元」还在
+- **一词多译**：token 在 LLM 语境锁定「词元」、安全语境→令牌；分不出域则并列候选，绝不瞎猜
+- **隐私优先**：默认不上云。开启后兜底**只上传术语单词本身**。密钥不进 toml
+- **系统托盘**：右键菜单分组：词库 / 提示词 / 大模型连接 / 界面与热键
+- **可配置**：`%APPDATA%\term-lens\config.toml` 改模型/超时/热键，`fallback_prompt.md` 改提示词，保存即生效
 
 ## 安装
 
-1. Releases 下载 `TermLens_0.1.0_x64-setup.exe` 安装（免管理员权限）
-2. 运行后进程常驻，托盘区显示图标（如需完全隐藏可稍后自定）——**默认就是安静的**
-3. 划选任意包含英文术语的文本，双击 `Ctrl`
+前置：**Windows 10/11**、[MSVC 工具链](https://visualstudio.microsoft.com/visual-cpp-build-tools/)（安装「使用 C++ 的桌面开发」）、系统自带或引导安装 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) Runtime。
 
-> 首次运行 Windows SmartScreen 可能拦截（未签名），点"仍要运行"即可。
+1. Releases 下载 `TermLens_0.1.2_x64-setup.exe` 安装（免管理员权限，currentUser）
+2. 运行后进程常驻托盘——**默认就是安静的、不上云的**
+3. 在普通桌面窗口划选包含英文术语的文本，双击 `Ctrl`
+
+> 首次运行 Windows SmartScreen 可能拦截（未签名），点「仍要运行」即可。不支持 Windows Terminal / ConPTY 取词。
 
 ## 使用
 
 | 操作 | 说明 |
 |------|------|
-| 双击 `Ctrl` | 划选取词（默认；托盘菜单或 `config.toml` 可切 `Alt+T`，即切即用） |
+| 双击 `Ctrl` | 划选取词（默认；托盘或 `config.toml` 可切 `Alt+T`） |
 | 点击英文词 | 划选含多个术语时循环切换 |
-| 采纳 / 修改 / 否决 | 裁决写入个人层，下次秒出 |
+| 采纳 / 修改 / 否决 | 裁决写入个人层；否决不改官方种子 |
 | 托盘图标 左键 | 显示悬浮窗 |
-| 托盘图标 右键 | 分组菜单：词库统计/导出/导入、提示词编辑、模型配置查看/测试/编辑、弹窗位置与触发方式切换 |
+| 托盘图标 右键 | 词库统计/导出/导入、提示词、模型配置、弹窗位置与触发方式 |
 | `Esc` / 点别处 | 隐藏悬浮窗 |
+
+剪贴板没变时会提示失败，**不会查询、不会上云、不写 query_log**。
 
 ## 配置云端兜底（可选）
 
-不配也能用（只有本地词表）。想解锁任意新词的兜底，编辑
-`%APPDATA%\term-lens\config.toml`，指向任意 OpenAI 兼容 API：
+不配也能用（只有本地词表）。默认 `base_url` 为空。若要解锁新词兜底：
+
+1. 把 API Key 放进 **Windows 凭据管理器**（目标名 `TermLens/api_key`），或环境变量 `TERM_LENS_API_KEY`。**不要把密钥写进 toml。** 若旧版 toml 里有 `api_key`，启动时会尽量迁出后删掉。
+2. 编辑 `%APPDATA%\term-lens\config.toml`：
 
 ```toml
 [provider]
-base_url = "https://api.deepseek.com/v1"   # 或任何兼容网关
-api_key  = "sk-..."
-model    = "deepseek-chat"
+base_url = "http://127.0.0.1:10100/v1"   # loopback 明文 http 允许；公网必须 https
+model    = "deepseek-v4-flash"
+timeout_ms = 3000
 ```
+
+不允许的 URL（任意主机的 http、非 http(s) 等）会直接失败且不发请求。loopback 绕过系统代理；外网走系统代理。
+
+「恢复默认配置」写入的内容与仓库 `src-tauri/src/default_config.toml` 一致：`base_url = ""`、`timeout_ms = 3000`。
+
+从 0.1.1 升级会关闭旧的默认公网兜底（`https://api.deepseek.com`）。需要云端请在 `config.toml` 显式再写 `base_url`。
 
 ## 命令行
 
-```bash
-term-lens.exe --export          # 导出词库 CSV（可分享给同事导入）
-term-lens.exe --stats           # 命中率/延迟统计
-term-lens.exe --rescan xx.csv   # 导入外部词库（永不覆盖个人裁决层）
+```powershell
+$env:TERMLENS_CLI = "1"   # 可选；--export/--stats/--rescan 会自动跳过单实例互斥
+term-lens.exe --export          # 导出词库 CSV
+term-lens.exe --stats           # 命中率 / 真正 95 分位延迟
+term-lens.exe --rescan xx.csv   # 导入外部词库（永不覆盖个人裁决层；官方 rejected 可恢复）
 ```
 
 ## 词库从哪来
 
-内置种子 = 社区 AI 术语库（LLM-Fundamentals，2026-01）+ 常见工程术语手工裁决。
-你的个人层完全私有；`--export` 导出的活跃词可发给别人 `--rescan` 导入，团队共建。
+内置种子 = `data/seed_terms.csv`（含 agentic-cn 强制映射）+ `data/ai_terms_latest.csv`。两份合并后 `(en,domain,layer)` unique。
+你的个人层完全私有；`--export` 导出的活跃词可发给别人 `--rescan` 导入。
 
-## 构建
+## 构建（Windows / PowerShell）
 
-```bash
-cd src-tauri && cargo build --release        # 绿色版 exe
-npx tauri build                              # NSIS 安装包 → src-tauri/target/release/bundle/nsis/
+```powershell
+# 前置: rustup + Visual Studio Build Tools (MSVC) + WebView2
+cd D:\_projects\tools\term-lens
+npm install
+cd src-tauri
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo build --release            # 绿色版 exe: target\release\term-lens.exe
+cd ..
+npx tauri build                  # NSIS 安装包
+# 产物: src-tauri\target\release\bundle\nsis\TermLens_0.1.2_x64-setup.exe
 ```
+
+`package.json` 脚本：`npm test`（cargo test）、`npm run dev`、`npm run build`。
 
 ## 设计文档
 
-`DESIGN.md`（第一性原理、架构、验收指标）· `AGENTS.md`（AI 代理协作规范）
+`DESIGN.md`（第一性原理、架构、验收指标；未实施项已标注）· `AGENTS.md`（AI 代理协作规范）
+
+运行时提示词文件是 `%APPDATA%\term-lens\fallback_prompt.md`，内置默认在 `src-tauri/src/fallback_prompt.md`。仓库里没有 `prompts/fallback.md`。
 
 ## License
 

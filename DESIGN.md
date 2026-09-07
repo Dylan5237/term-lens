@@ -1,8 +1,8 @@
 # Term Lens 设计文档
 
-> AI 输出中英混杂术语实时注释工具 · v0.2
-> 日期：2026-09-03 · 作者：森几 × 小墨
-> v0.2 变更：按第一性原理审核修订——多候选 schema 与决策日志语义、数据出境硬约束、浏览器零触发注释升为一等公民（二期）、术语表→agent 词表导出闭环、可证伪验收指标、导入源置信度分级
+> Windows 托盘划词注释器 · v0.1.2（发版冻结）
+> 日期：2026-09-07 · 作者：森几 × 小墨
+> v0.1.2 变更：产品冻结为「划词注释器、非终端透镜」；默认无云端；纠正写坏数据/误出境路径；未实施项显式标注
 
 ---
 
@@ -11,14 +11,14 @@
 本质命题：**AI 输出中的未知符号阻碍理解，工具的职责是以最小摩擦把"未知"变成"已知"。** 所有设计决策必须可追溯到以下四条约束之一，否则不做：
 
 - **P1 触发摩擦最小化**：用户为搞懂一个词付出的动作要趋近于零。零触发 > 一键 > 多步。
-- **P2 映射正确性**：含义依赖语境。工具输出的不是"翻译"，是**"在已裁决规则下的最优解释"**。
-- **P3 延迟分层**：本地路径 <200ms 是体验生命线；云端路径 ~1s 可接受但必须可预期、可降级。
-- **P4 沉淀复利**：每次查询都应让系统变聪明（采纳闭环），且资产可导出、可复用、可开源。
+- **P2 映射正确性**：含义依赖语境。工具输出的不是"翻译"，是**"在已裁决规则下的最优解释"**。一词多义必须带 domain 多候选；语境无法裁决时并列展示，**绝不猜一个答案**。
+- **P3 延迟分层**：本地路径 p95 <200ms 是生命线。0.1.2 热路径走索引 SQLite（`en` 等值查询）。**内存 LRU：未实施**（本版本明确不做）。云端路径默认关闭；用户配置合法 endpoint 后超时默认 3s，必须可预期、可静默降级。
+- **P4 沉淀复利**：每次查询都应让系统变聪明（采纳闭环），且资产可导出、可复用。0.1.2 导出格式为 **CSV**。Markdown / agents 词表段落 / TBX：**未实施**。
 
 附加硬约束：
 
-- **H1 数据出境最小化**：本项目运行在公司笔记本上。云端兜底**默认仅传输术语单词本身**；任何携带上下文的请求必须用户显式开启。AI 输出可能包含内部代码与业务信息，此条为合规红线。
-- **H2 资产中立**：术语库随时可整体导出为开放格式（Markdown/CSV），不锁定私有存储。微软 TBX 派生数据若未来开源发布须可剥离（署名要求）。
+- **H1 数据出境最小化**：本项目运行在公司笔记本上。**默认无云端**（`base_url` 为空则零请求）。开启后**仅传输术语单词本身**。带上下文请求：**未实施**（已删除死开关，不提供 `send_context`）。日志/遥测禁止记录划选原文，只记归一化后的术语。
+- **H2 资产中立**：术语库随时可导出为开放 CSV，不锁定私有存储。微软 TBX 派生数据（L3）：**未实施**。
 
 ## 1. 背景与问题
 
@@ -30,52 +30,63 @@ smoke 应理解为"冒烟测试"，Runtime 应理解为"程序运行时环境"�
 
 ## 2. 目标与非目标
 
-**目标**
-- 常用术语注释延迟 < 200ms，新术语云端兜底 p95 < 1.2s
-- 术语准确率优先：一词多义按语境/域裁决，不确定时给多候选而非瞎猜
-- 覆盖浏览器 + 桌面应用（热键悬浮窗 + 浏览器内联自动注释）
-- 术语库持续沉淀 → 反哺 agent 词表 → 可开源
+**产品冻结（0.1.2）**：这是 **Windows 托盘划词注释器**，不是终端透镜。不支持终端取词。取词靠模拟复制；剪贴板相对快照没变就失败，绝不拿旧内容去查、更不上云。默认无云端；没配好 loopback/白名单就不发外网。
 
-**非目标**
-- 整页/整篇文档翻译（沉浸式翻译已覆盖）
-- 云端整段流式跟翻（延迟与质量双输）
-- 终端取词（Windows Terminal/ConPTY 无 DOM，模拟复制有 Ctrl+C 冲突，二期单独立项评估）
-- 跨平台（只做 Windows）
+**目标**
+- 常用术语注释延迟 < 200ms；云端仅在用户显式配置合法 endpoint 后启用，超时默认 3s
+- 术语准确率优先：一词多义按语境/域裁决，不确定时给多候选而非瞎猜
+- 全局热键 / 托盘触发悬浮窗（覆盖普通桌面窗口的划选）
+- 术语库持续沉淀 → CSV 导出
+
+**非目标（0.1.2 明确不做）**
+- 整页/整篇文档翻译
+- 云端整段流式跟翻
+- 终端取词（Windows Terminal / ConPTY）
+- 浏览器扩展 / 零触发内联注释
+- 内存 LRU
+- 微软 TBX 导入（L3）
+- agents / Markdown / 多格式导出（仅 CSV）
+- Linux / macOS
+- 覆盖旧 Git tag
+- `send_context` 带上下文上云
 
 ## 3. 形态与技术栈
 
-**形态：托盘常驻小工具 + 浏览器辅助扩展**。
-理由：兼容面（网页 ChatGPT、桌面客户端）的共同点是"屏幕上的文字"，最小摩擦路径是①零触发内联注释（浏览器扩展，仅本地词表）②全局热键悬浮窗（覆盖一切窗口）。
+**形态：Windows 托盘常驻划词注释器**（热键或托盘菜单 → 模拟复制 → 悬浮窗）。
 
 | 项 | 选型 | 理由 |
 |----|------|------|
-| 应用框架 | Tauri 2.x（Rust + WebView） | 安装包小、内存低、系统级能力（全局钩子/托盘/无边框窗）成熟 |
-| 术语存储 | SQLite（WAL 模式）+ 内存 LRU | 单文件零运维；高频词常驻内存保 P3 |
-| 云端兜底 | opencodex（127.0.0.1:10100）→ deepseek-v4-flash | 快、便宜、多 provider 可切换 |
-| 密钥存储 | Windows 凭据管理器 | 不落明文 |
-| 资产格式 | SQLite 为准，CSV/Markdown 双向导出 | H2 |
+| 应用框架 | Tauri 2.x（Rust + WebView） | 安装包小、内存低、托盘/无边框窗成熟 |
+| 术语存储 | SQLite（WAL 模式） | 单文件零运维；`UNIQUE(en,domain,layer)`；热路径 `en` 等值 + 索引 |
+| 云端兜底 | 默认关闭。可选：loopback OpenAI 兼容（如 127.0.0.1:10100）或 **https** 公网 | 未配置 / URL 不在允许名单 → 不发请求 |
+| 密钥存储 | Windows 凭据管理器（toml 不是正路） | 不落明文 |
+| 资产格式 | SQLite 为准，CSV 导出 | H2；其它格式未实施 |
 
 ## 4. 核心架构
 
 ```
-┌─ 零触发路径（浏览器扩展，二期）
-│    AI 输出停稳 → 本地词表匹配已知术语 → 内联括注/下划线（纯本地，不碰云端）
+┌─ 零触发路径（浏览器扩展）—— 未实施
 │
-├─ 热键路径（MVP）
-│    划词 + Alt+T → 模拟复制 → 剪贴板快照恢复 → 预提取英文片段
+├─ 热键/托盘路径（0.1.2）
+│    划词 + 双击 Ctrl（或 Alt+T）→ 模拟复制 → 剪贴板必须相对快照变化
+│        未变化 → 失败提示，零 lookup / 零 fallback / 不写 query_log
+│        已变化 → cap 8–16KB → 预提取英文片段（CJK 紧贴可抽；停用词不作为第一优先）
 │        ├─ 一级：本地术语表（归一化 + 域裁决）    命中 <200ms
-│        └─ 二级：opencodex 云端兜底（仅传术语，H1）~1s
+│        │         多候选且分差为 0 → hit=None，并列展示，不上云
+│        └─ 二级：云端兜底（仅传术语，H1；未配置则失败且不发请求）
 │              └─ 结果标记 pending → 悬浮窗 → 采纳/修改/否决 → 沉淀个人层
 └─ 反哺路径（P4/H2）
-     术语表导出 → ① agent 词表（CLAUDE.md / AGENTS.md 段落，约束自家 AI 输出格式）
-                → ② 开放格式发布（剥离 L3 派生数据后可开源）
+     术语表导出 CSV（agents/Markdown/TBX 导出：未实施）
 ```
 
 关键行为约定：
-- **剪贴板快照恢复**：取词后恢复原剪贴板，不污染用户复制
-- **云端降级**：超时 3s / opencodex 不可达 → 静默仅本地结果，悬浮窗标注"离线"
-- **多候选裁决**（P2）：命中多域候选时按上下文关键词打分选域；分不出则悬浮窗并列展示候选让用户点选（点选本身即一次裁决，计入个人层）
-- **上下文开关**：默认关闭（H1）；开启时仅传划选文本前后各一句，且首次开启弹合规确认
+- **剪贴板快照**：取词后恢复原剪贴板。相对快照未变 → 中止，禁止用旧内容查询或上云
+- **云端降级**：`base_url` 空 / URL 非法 / 超时 3s / 不可达 → 静默仅本地结果，悬浮窗标注"离线"
+- **多候选裁决**（P2）：命中多域候选时按上下文关键词打分选域；`best==0` 且多候选则 **不猜**，并列展示
+- **上下文开关**：删除。云端永远只传术语单词
+- **取词单飞**：同时只跑一次 grab；Alt+T / 托盘翻译必须在后台线程，禁止在事件线程同步 sleep
+- **热键切换**：注册成功后再改内存开关；失败回滚
+- **seqId**：`showTerms` / `renderTerm` 入口发放；lookup 与 fallback 返回后都校验
 
 ## 5. 数据模型（v0.2 重写：一词多候选 + 决策日志语义）
 
@@ -85,88 +96,104 @@ smoke 应理解为"冒烟测试"，Runtime 应理解为"程序运行时环境"�
 CREATE TABLE terms (
   id INTEGER PRIMARY KEY,
   en TEXT NOT NULL,                 -- 归一化 lowercase
-  en_variants TEXT,                 -- JSON 词形变体 ["smoke tests","Smoke-Test"]
+  en_variants TEXT,                 -- 0.1.2 不参与热路径查询（空列，禁止 LIKE 全表扫描）
   zh TEXT NOT NULL,                 -- 译法
-  domain TEXT NOT NULL DEFAULT 'general',  -- general|llm|frontend|security|devops|windows|...
-  ctx_hints TEXT,                   -- JSON: 选此域的上下文线索词 ["prompt","agent","token"]
-  keep_policy TEXT DEFAULT 'translate',    -- translate|keep|note
-  note TEXT,                        -- 释义/译注
+  domain TEXT NOT NULL DEFAULT 'general',
+  ctx_hints TEXT,                   -- JSON；读取必须按 Option，NULL 不得截断导出
+  keep_policy TEXT DEFAULT 'translate',
+  note TEXT,
   layer TEXT NOT NULL,              -- personal|ai|ms   (高层压过低层)
-  source TEXT,                      -- 来源标识，关联 confidence
+  source TEXT,
   status TEXT DEFAULT 'active',     -- active|pending|conflict|rejected
   hit_count INTEGER DEFAULT 0,
   created_at TEXT, updated_at TEXT,
   UNIQUE(en, domain, layer)
 );
 
-CREATE TABLE sources (              -- 导入源置信度分级（仲裁加权用）
-  id TEXT PRIMARY KEY,              -- agentic-cn / dongshuyan / csdn / ms-tbx / manual / cloud-adopted
-  confidence INTEGER,               -- 人工校对流程>聚合内容: agentic-cn=90 csdn=60 ms-tbx=80 manual=100
-  license_note TEXT
+CREATE TABLE query_log (
+  id INTEGER PRIMARY KEY,
+  en TEXT NOT NULL,
+  ts TEXT DEFAULT (datetime('now','localtime')),
+  layer_hit TEXT,
+  latency_ms INTEGER
 );
 
-CREATE TABLE decisions (            -- 裁决日志：冲突的最终归属
-  id INTEGER PRIMARY KEY, en TEXT, chosen_term_id INTEGER, reason TEXT, decided_at TEXT
+CREATE TABLE meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );
+-- schema_version=1
 ```
 
-仲裁规则：同 (en, domain) 多来源冲突 → 按 source.confidence 加权，最高者胜出但入 conflict 队列待人工确认；无裁决记录时悬浮窗并列展示，用户点选即写入 decisions。
+`sources` / `decisions` 表与冲突仲裁 UI：**未实施**。
+
+仲裁规则（0.1.2 已实施部分）：同 (en, domain) 多候选按 ctx_hints 打分；分不出则并列展示，用户点选写入个人层。按 `source.confidence` 加权的仲裁队列：**未实施**。
+
+**层隔离**
+- `reject` 只 UPDATE `layer='personal'`，禁止改种子层 status
+- `adopt` 的 `ON CONFLICT` 必须 `SET status='active', source='user-adopted'`
+- 官方层启动时 `INSERT OR IGNORE`（锁定词例外 upsert），永不碰 personal
+- 导入：非 personal 且 `rejected` 可恢复为 active；personal-rejected 只覆盖展示，不改种子
+
+**锁定译名（官方层）**：`token` + domain `llm` → **词元**（security 域保留「令牌」）。
 
 ## 6. 术语库：三层结构 + 沉淀扩展点
 
-| 层 | 内容 | 演进 |
-|----|------|------|
-| L1 个人层 | 用户拍板的译法与裁决 | 采纳/修改/点选闭环持续沉淀 |
-| L2 AI 术语层 | agent 时代术语（token/hallucination/guardrail…） | 开源源导入 + 滚动补充（无权威库，本层即差异化资产） |
-| L3 经典底座 | 微软术语库 TBX ~3 万条 | 一次性导入；开源发布时可剥离（H2） |
+| 层 | 内容 | 0.1.2 |
+|----|------|--------|
+| L1 个人层 | 用户拍板的译法与裁决 | 已实施：采纳/修改/否决 |
+| L2 AI 术语层 | agent 时代术语 | 已实施：两份 CSV 种子，unique `(en,domain,layer)` |
+| L3 经典底座 | 微软术语库 TBX | **未实施** |
 
-**扩展点（开放接口）：**
-1. `ImportSource` trait：TbxImporter / MarkdownTableImporter / CsvImporter 内置，社区新源即插即用
-2. 冲突仲裁队列（见 §5）
-3. 采纳闭环：cloud-adopted 默认落 pending，需用户确认才转 active（防云端幻觉污染词表）
-4. 导出矩阵：→ agent 词表段落（CLAUDE.md/AGENTS.md 格式）｜→ Markdown/CSV/TBX｜→ 沉浸式翻译自定义术语
-5. 使用统计：hit_count 驱动高频置顶与零命中清理
+**扩展点：**
+1. `ImportSource` trait / TbxImporter：**未实施**。0.1.2 为 CSV 解析导入
+2. 冲突仲裁队列：**未实施**
+3. 采纳闭环：cloud-adopted 默认落 pending，需用户确认才转 active — **已实施**
+4. 导出矩阵：CSV — **已实施**；agent 词表 / Markdown / TBX — **未实施**
+5. 使用统计：query_log + **真正 95 分位**（升序 `OFFSET n*19/20`）
 
 ## 7. 冷启动数据源
 
 | 来源 | 置信度 | 用途 |
 |------|--------|------|
-| canisn/agentic-design-patterns-cn rules.md 强制映射表 | 90（有 PR 审核） | L2 主源 + 译名决策规则 |
-| Microsoft Terminology Collection（TBX） | 80 | L3 底座 |
-| dongshuyan/LLM-Fundamentals 常见名词篇 | 75 | L2 |
-| spec-kit-cn TERMINOLOGY.md | 75 | L2 + "保留英文"规则样例 |
-| CSDN《大模型应用开发术语中英对照表》 | 60（聚合内容需甄别） | L2 补充 |
+| `data/seed_terms.csv`（含 agentic-cn 强制映射） | 90 | L2 主源；与 `ai_terms_latest.csv` 合并后 unique |
+| `data/ai_terms_latest.csv`（LLM-Fundamentals） | 75 | L2 补充；冲突键以 seed 为准 |
+| Microsoft Terminology Collection（TBX） | 80 | **未实施** |
+| 其它社区源 | — | **未实施** |
+
+启动策略：**不是** `seed_if_empty` 一次性。每次启动对官方层 `INSERT OR IGNORE`（锁定词 upsert），personal 不动。`schema_version` 启动迁移。
 
 ## 8. 模块划分（Tauri）
 
-- **capture**：global-shortcut(Alt+T，启动时冲突检测) + enigo 模拟 Ctrl+C + arboard 剪贴板读写快照恢复
-- **glossary**：正则英文片段提取 + 词形归一 + SQLite/内存 LRU 查询 + 域裁决打分
-- **fallback**：opencodex OpenAI 兼容调用；提示词来自 `prompt.md` 文件（每次读取=热重载）；超时/降级
-- **overlay**：无边框置顶不抢焦点窗（WS_EX_NOACTIVATE）、失焦即隐、多屏 DPI、采纳/修改/否决按钮
-- **tray/config**：托盘菜单、`config.toml`（provider/热键/上下文开关）、凭据管理器取 key
-- **export**（P4）：CLI 子命令 `term-lens export --format md|csv|agents`（agents = 生成词表段落贴进 CLAUDE.md）
+- **capture**：global-shortcut / 双击 Ctrl + enigo 模拟 Ctrl+C + arboard 快照；**未变化即中止**
+- **glossary**：ASCII 词边界提取（CJK 紧贴可抽）+ 保守归一 + SQLite 等值查询 + 域裁决（不分则不猜）
+- **fallback**：OpenAI 兼容调用；提示词来自 `%APPDATA%\term-lens\fallback_prompt.md`（每次读取=热重载）；IPC 有最大长度/字符类约束；未配置不发请求
+- **overlay**：无边框置顶窗、失焦即隐、采纳/修改/否决；CSP：`default-src 'self'`，`connect-src` 仅 ipc
+- **tray/config**：托盘菜单、`config.toml`（provider/热键，**不含 api_key 正路**）、凭据管理器取 key。启动时若 `base_url` 仍是 0.1.1 产品默认公网 DeepSeek，视为未选择并清空写回（自定义 host 不动）
+- **export**：`--export` 输出 CSV（`--format md|agents`：**未实施**）
 
 ## 9. 验收指标（可证伪）
 
 | 指标 | MVP 门槛 | 一个月目标 | 测量方式 |
 |------|----------|------------|----------|
 | 本地命中率 | >70% | >85% | 用真实 AI 输出语料回放测 query_log |
-| 本地路径延迟 p95 | <200ms | <100ms | query_log.latency |
-| 云端兜底 p95 | <1.2s | <1.0s | 计时日志 |
+| 本地路径延迟 p95 | <200ms | <100ms | query_log.latency_ms，**真正 95 分位**（升序 OFFSET n×19/20） |
+| 云端兜底 p95 | <1.2s（仅当已配置） | <1.0s | 计时日志 |
 | 悬浮窗取词→显示 | <200ms（命中时） | — | 手动秒表抽查 |
 | 周均查询量 | >50 次/周 | — | 存活验证（没人用就砍项目） |
 
 ## 10. 里程碑
 
-- **M0（本次交付）**：Tauri 最小闭环——热键→取词→本地表（含 L2 种子词）→云端兜底→悬浮窗→采纳回写→CSV 导出
-- **M1**：TbxImporter + 冲突仲裁 UI + 浏览器扩展（零触发内联注释）
-- **M2**：使用统计面板、agent 词表导出、终端取词评估
-- **M3（候选）**：术语表开源发布、团队共享
+- **M0 / 0.1.2（本次交付）**：Windows 托盘划词闭环——热键→取词（剪贴板必须变化）→本地表→可选云端兜底→悬浮窗→采纳回写→CSV 导出；默认零外网
+- **M1（未实施）**：TbxImporter + 冲突仲裁 UI + 浏览器扩展
+- **M2（未实施）**：使用统计面板、agent 词表导出、终端取词评估（评估 ≠ 做）
+- **M3（候选，未实施）**：术语表开源发布、团队共享
 
 ## 11. 风险与对策
 
-- 译名分歧（Agent→智能体/代理）：决策日志 + 仲裁队列，个人层永久压过来源层（默认采纳 agentic-cn 规范"智能体"）
+- 译名分歧（Agent→智能体/代理）：个人层永久压过来源层（默认采纳 agentic-cn 规范「智能体」）
 - 云端幻觉污染词表：cloud-adopted 必经 pending 确认
-- 数据出境：H1 默认仅术语；带上下文首次开启需合规确认
-- MSVC/Tauri 构建链在公司笔记本受限：已验证 rustc 1.97 + VS2022 Professional 可用
-- opencodex 单点：静默降级已内置
+- 数据出境：H1 默认无云端；开启后仅术语单词；loopback 走 no_proxy，外网走系统代理
+- 剪贴板未变误查旧内容：相对快照未变则失败，零查询零上云
+- MSVC/Tauri 构建链在公司笔记本受限：已验证 rustc + VS2022 Professional 可用
+- opencodex / 公网 API 单点：未配置或失败则静默降级
