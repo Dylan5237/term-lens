@@ -2,7 +2,6 @@ src-tauri/target/
 src-tauri/target-*/
 dist/
 node_modules/
-package-lock.json
 backup-*/
 *.db
 *.db-wal

@@ -1,4 +1,14 @@
 {
+  "name": "term-lens",
+  "version": "0.1.2",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings"
+  },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4"
   }
