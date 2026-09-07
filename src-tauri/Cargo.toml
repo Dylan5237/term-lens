@@ -1,6 +1,6 @@
 [package]
 name = "term-lens"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI 输出中英混杂术语实时注释工具 (Windows)"
 edition = "2021"
 
