@@ -266,10 +266,20 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_on_012_timeout_is_kept_without_key() {
+        let raw = "[provider]\nbase_url = \"https://api.deepseek.com\"\ntimeout_ms = 3000\n";
+        let out = rewrite_legacy_cloud_migration(raw, false).expect("应打标并保留 URL");
+        let cfg = parse_config_toml(&out);
+        assert_eq!(cfg.provider.base_url, "https://api.deepseek.com");
+        assert!(cfg.migrate.cloud_default_cleared);
+    }
+
+    #[test]
     fn default_config_has_empty_base_url() {
         let cfg = parse_config_toml(DEFAULT_CONFIG);
         assert!(cfg.provider.base_url.is_empty());
         assert_eq!(cfg.provider.timeout_ms, 3000);
+        assert!(cfg.migrate.cloud_default_cleared);
         assert!(DEFAULT_CONFIG.contains("base_url = \"\""));
         assert!(DEFAULT_CONFIG.contains("密钥不要写在本文件"));
     }
@@ -299,19 +309,44 @@ mod tests {
                 is_legacy_product_default_base_url(url),
                 "应识别为 0.1.1 产品默认: {url}"
             );
-            let raw = format!(
-                "[provider]\nbase_url = \"{url}\"\nmodel = \"deepseek-v4-flash\"\ntimeout_ms = 5000\n"
+            assert_eq!(
+                plan_legacy_cloud_url(false, url, false, 15000),
+                LegacyCloudUrlAction::ClearAndMark
             );
-            let out = rewrite_legacy_default_base_url(&raw)
+            let raw = format!(
+                "[provider]\nbase_url = \"{url}\"\nmodel = \"deepseek-v4-flash\"\ntimeout_ms = 15000\n"
+            );
+            let out = rewrite_legacy_cloud_migration(&raw, false)
                 .unwrap_or_else(|| panic!("应清空旧默认 URL: {url}"));
             let cfg = parse_config_toml(&out);
             assert!(
                 cfg.provider.base_url.is_empty(),
                 "写回后 base_url 应为空, url={url}"
             );
+            assert!(cfg.migrate.cloud_default_cleared);
             assert_eq!(cfg.provider.model, "deepseek-v4-flash");
-            assert_eq!(cfg.provider.timeout_ms, 5000);
+            assert_eq!(cfg.provider.timeout_ms, 15000);
         }
+    }
+
+    #[test]
+    fn explicit_deepseek_with_key_is_kept() {
+        let raw = "[provider]\nbase_url = \"https://api.deepseek.com\"\napi_key = \"sk-test\"\nmodel = \"deepseek-v4-flash\"\n";
+        let out = rewrite_legacy_cloud_migration(raw, false).expect("应打标但保留 URL");
+        let cfg = parse_config_toml(&out);
+        assert_eq!(cfg.provider.base_url, "https://api.deepseek.com");
+        assert!(cfg.migrate.cloud_default_cleared);
+        assert_eq!(
+            plan_legacy_cloud_url(true, "https://api.deepseek.com", false, 3000),
+            LegacyCloudUrlAction::Skip
+        );
+        assert!(rewrite_legacy_cloud_migration(&out, false).is_none());
+    }
+
+    #[test]
+    fn flagged_deepseek_url_not_cleared_again() {
+        let raw = "[provider]\nbase_url = \"https://api.deepseek.com\"\n\n[migrate]\ncloud_default_cleared = true\n";
+        assert!(rewrite_legacy_cloud_migration(raw, false).is_none());
     }
 
     #[test]
@@ -329,12 +364,23 @@ mod tests {
                 !is_legacy_product_default_base_url(url),
                 "自定义 URL 不得当产品默认: {url}"
             );
-            let raw = format!("[provider]\nbase_url = \"{url}\"\nmodel = \"keep-me\"\n");
-            assert!(
-                rewrite_legacy_default_base_url(&raw).is_none(),
-                "自定义 URL 不得改写: {url}"
+            assert_eq!(
+                plan_legacy_cloud_url(false, url, false, 3000),
+                LegacyCloudUrlAction::MarkOnly
             );
         }
+    }
+
+    #[test]
+    fn key_migration_requires_roundtrip() {
+        assert!(key_migration_committed(Ok(()), Some("sk-1"), "sk-1"));
+        assert!(!key_migration_committed(Ok(()), Some(""), "sk-1"));
+        assert!(!key_migration_committed(Ok(()), None, "sk-1"));
+        assert!(!key_migration_committed(
+            Err("fail".into()),
+            Some("sk-1"),
+            "sk-1"
+        ));
     }
 
     #[test]

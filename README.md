@@ -62,16 +62,18 @@
 
 ```toml
 [provider]
-base_url = "http://127.0.0.1:10100/v1"   # loopback 明文 http 允许；公网必须 https
+base_url = "https://api.deepseek.com"   # OpenAI 兼容；不要用 /anthropic
 model    = "deepseek-v4-flash"
 timeout_ms = 3000
 ```
+
+本地代理也可以：`base_url = "http://127.0.0.1:10100/v1"`。loopback 明文 http 允许；其它公网必须 https。
 
 不允许的 URL（任意主机的 http、非 http(s) 等）会直接失败且不发请求。loopback 绕过系统代理；外网走系统代理。
 
 「恢复默认配置」写入的内容与仓库 `src-tauri/src/default_config.toml` 一致：`base_url = ""`、`timeout_ms = 3000`。
 
-从 0.1.1 升级会关闭旧的默认公网兜底（`https://api.deepseek.com`）。需要云端请在 `config.toml` 显式再写 `base_url`。
+从 0.1.1 升级：仅当仍是未改过的默认文件（`timeout_ms = 15000` 且未配置密钥）时，才会一次性关掉默认公网 DeepSeek，并写入 `cloud_default_cleared`。之后在 toml 里显式填写 `https://api.deepseek.com` 会保留。toml 里的 `api_key` 只有成功写入凭据管理器并回读一致后才会从文件删除；失败则留在 toml。
 
 ## 命令行
 

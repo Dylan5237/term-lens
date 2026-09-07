@@ -16,6 +16,14 @@ pub struct Config {
     pub provider: ProviderCfg,
     pub ui: UiCfg,
     pub hotkey: HotkeyCfg,
+    pub migrate: MigrateCfg,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct MigrateCfg {
+    /// 一次性：0.1.1 默认公网 DeepSeek 已处理。之后用户再填同一 URL 不得清空。
+    pub cloud_default_cleared: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -255,37 +263,91 @@ pub fn is_legacy_product_default_base_url(raw: &str) -> bool {
     s == "https://api.deepseek.com"
 }
 
-/// 若 toml 里的 base_url 仍是 0.1.1 产品默认公网端点，清空该字段并返回新文本。
-/// 其它主机（自建 / 其它 API）原样返回 None。model 等字段由调用方保留在原文中。
-pub fn rewrite_legacy_default_base_url(raw: &str) -> Option<String> {
-    let cfg = parse_config_toml(raw);
-    if !is_legacy_product_default_base_url(&cfg.provider.base_url) {
-        return None;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacyCloudUrlAction {
+    /// 已打标，不再改 URL。
+    Skip,
+    /// 0.1.1 未配密钥的产品默认：清空 URL 并打标。
+    ClearAndMark,
+    /// 用户已显式使用云端（有密钥）或 URL 已非默认：只打标。
+    MarkOnly,
+}
+
+/// `has_secret`：toml 或凭据管理器里已有非空密钥。
+/// `timeout_ms == 15000` 才像未改过的 0.1.1 默认文件；0.1.2 默认是 3000。
+pub fn plan_legacy_cloud_url(
+    already_cleared: bool,
+    base_url: &str,
+    has_secret: bool,
+    timeout_ms: u64,
+) -> LegacyCloudUrlAction {
+    if already_cleared {
+        return LegacyCloudUrlAction::Skip;
     }
-    patch_config_field(raw, "base_url", "").ok()
+    if is_legacy_product_default_base_url(base_url) && !has_secret && timeout_ms == 15000 {
+        LegacyCloudUrlAction::ClearAndMark
+    } else {
+        LegacyCloudUrlAction::MarkOnly
+    }
+}
+
+pub fn upsert_cloud_default_cleared(raw: &str, value: bool) -> String {
+    let re = Regex::new(r"(?m)^([ \t]*cloud_default_cleared[ \t]*=[ \t]*)(true|false)\s*$")
+        .expect("cloud_default_cleared regex");
+    if re.is_match(raw) {
+        return re.replace(raw, format!("$1{value}")).into_owned();
+    }
+    format!(
+        "{}\n\n[migrate]\ncloud_default_cleared = {value}\n",
+        raw.trim_end()
+    )
+}
+
+/// 一次性迁移：无密钥的 0.1.1 默认 DeepSeek 才清空；之后同一 URL 视为用户选择。
+pub fn rewrite_legacy_cloud_migration(raw: &str, has_cred_secret: bool) -> Option<String> {
+    let cfg = parse_config_toml(raw);
+    let has_secret = has_cred_secret || !cfg.provider.api_key.trim().is_empty();
+    match plan_legacy_cloud_url(
+        cfg.migrate.cloud_default_cleared,
+        &cfg.provider.base_url,
+        has_secret,
+        cfg.provider.timeout_ms,
+    ) {
+        LegacyCloudUrlAction::Skip => None,
+        LegacyCloudUrlAction::ClearAndMark => {
+            let patched = patch_config_field(raw, "base_url", "").ok()?;
+            Some(upsert_cloud_default_cleared(&patched, true))
+        }
+        LegacyCloudUrlAction::MarkOnly => Some(upsert_cloud_default_cleared(raw, true)),
+    }
+}
+
+/// 凭据回读必须等于原文才允许从 toml 删 key。
+pub fn key_migration_committed(
+    store_result: Result<(), String>,
+    roundtrip: Option<&str>,
+    original: &str,
+) -> bool {
+    store_result.is_ok() && roundtrip == Some(original)
 }
 
 pub fn load_config() -> Config {
     let path = data_dir().join("config.toml");
     write_if_absent(&path, DEFAULT_CONFIG);
-    migrate_legacy_default_base_url(&path);
     migrate_api_key_file(&path);
-    let mut cfg = fs::read_to_string(&path)
+    migrate_legacy_default_base_url(&path);
+    fs::read_to_string(&path)
         .ok()
         .map(|s| parse_config_toml(&s))
-        .unwrap_or_default();
-    // 写回失败时本会话仍视为未配置，避免旧默认公网继续出境。
-    if is_legacy_product_default_base_url(&cfg.provider.base_url) {
-        cfg.provider.base_url.clear();
-    }
-    cfg
+        .unwrap_or_default()
 }
 
 fn migrate_legacy_default_base_url(path: &Path) {
     let Ok(raw) = fs::read_to_string(path) else {
         return;
     };
-    if let Some(out) = rewrite_legacy_default_base_url(&raw) {
+    let has_cred = read_api_key().map(|s| !s.is_empty()).unwrap_or(false);
+    if let Some(out) = rewrite_legacy_cloud_migration(&raw, has_cred) {
         if out != raw {
             let _ = fs::write(path, out);
         }
@@ -297,10 +359,13 @@ fn migrate_api_key_file(path: &Path) {
         return;
     };
     let (stripped, key) = strip_toml_api_key(&raw);
-    if let Some(k) = key {
-        if store_api_key(&k).is_ok() && stripped != raw {
-            let _ = fs::write(path, stripped);
-        }
+    let Some(k) = key else {
+        return;
+    };
+    let stored = store_api_key(&k);
+    let roundtrip = read_api_key();
+    if key_migration_committed(stored, roundtrip.as_deref(), &k) && stripped != raw {
+        let _ = fs::write(path, stripped);
     }
 }
 
@@ -364,7 +429,15 @@ fn windows_cred_write(target: &str, secret: &str) -> Result<(), String> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    let mut blob: Vec<u8> = secret.as_bytes().to_vec();
+    let mut user_w: Vec<u16> = OsStr::new("TermLens")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // Windows 通用凭据惯例是 UTF-16 LE；写 UTF-8 回读常为空。
+    let mut blob: Vec<u8> = secret
+        .encode_utf16()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
     let cred = CREDENTIALW {
         Flags: Default::default(),
         Type: CRED_TYPE_GENERIC,
@@ -377,7 +450,7 @@ fn windows_cred_write(target: &str, secret: &str) -> Result<(), String> {
         AttributeCount: 0,
         Attributes: std::ptr::null_mut(),
         TargetAlias: PWSTR::null(),
-        UserName: PWSTR::null(),
+        UserName: PWSTR(user_w.as_mut_ptr()),
     };
     unsafe { CredWriteW(&cred, 0) }.map_err(|e| format!("写入凭据失败: {e}"))
 }
@@ -409,6 +482,29 @@ fn windows_cred_read(target: &str) -> Option<String> {
             std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize).to_vec()
         };
         CredFree(cred as *const std::ffi::c_void);
-        String::from_utf8(bytes).ok().map(|s| s.trim().to_string())
+        decode_cred_blob(&bytes)
     }
+}
+
+fn decode_cred_blob(bytes: &[u8]) -> Option<String> {
+    let utf16_le_ascii = bytes.len() >= 2
+        && bytes.len() % 2 == 0
+        && bytes.chunks_exact(2).all(|c| c[1] == 0);
+    if utf16_le_ascii {
+        let u16s: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .take_while(|u| *u != 0)
+            .collect();
+        if let Ok(s) = String::from_utf16(&u16s) {
+            let t = s.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+    }
+    String::from_utf8(bytes.to_vec())
+        .ok()
+        .map(|s| s.trim().trim_end_matches('\0').to_string())
+        .filter(|s| !s.is_empty())
 }

@@ -18,8 +18,8 @@ Windows 托盘划词注释器发版门槛：可构建、有门禁、主路径不
 - 导出按 `Option` 读 `ctx_hints`，单行错误不截断，条数以实际写入为准
 - IPC 返回 `Result`，前端 try/catch，SQL 失败不再假成功
 - 默认 `base_url` 为空；未配置或 URL 不在允许名单则不发请求
-- 从 0.1.1 升级：若 `config.toml` 仍是产品默认公网 `https://api.deepseek.com`（含无尾斜杠、大小写、可选 `/v1`），启动时清空并写回；自定义 endpoint 不动。需要云端请显式再配
-- 密钥迁入 Windows 凭据管理器；toml 不再作为正路
+- 从 0.1.1 升级：仅未改过的默认文件（timeout 15000 且无密钥）才会一次性清空默认 DeepSeek URL，并打上 `cloud_default_cleared`；用户之后填写同一地址会保留
+- 密钥迁入 Windows 凭据管理器（UTF-16 回读校验成功后才从 toml 删除）
 - CSP：`default-src 'self'`，`connect-src` 仅 ipc；删除 `send_context` 死开关
 - `extract_terms` ASCII 词边界（CJK 紧贴可抽）；停用词不作为第一优先
 - `pick_term` 在 `best==0` 且多候选时不猜

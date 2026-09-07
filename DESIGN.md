@@ -169,7 +169,7 @@ CREATE TABLE meta (
 - **glossary**：ASCII 词边界提取（CJK 紧贴可抽）+ 保守归一 + SQLite 等值查询 + 域裁决（不分则不猜）
 - **fallback**：OpenAI 兼容调用；提示词来自 `%APPDATA%\term-lens\fallback_prompt.md`（每次读取=热重载）；IPC 有最大长度/字符类约束；未配置不发请求
 - **overlay**：无边框置顶窗、失焦即隐、采纳/修改/否决；CSP：`default-src 'self'`，`connect-src` 仅 ipc
-- **tray/config**：托盘菜单、`config.toml`（provider/热键，**不含 api_key 正路**）、凭据管理器取 key。启动时若 `base_url` 仍是 0.1.1 产品默认公网 DeepSeek，视为未选择并清空写回（自定义 host 不动）
+- **tray/config**：托盘菜单、`config.toml`（provider/热键，**不含 api_key 正路**）、凭据管理器取 key。0.1.1 默认公网 DeepSeek **只清一次**（无密钥且 timeout 仍为 15000）；打上 `migrate.cloud_default_cleared` 后用户再填同一 URL 保留。toml 中的 api_key 仅在凭据回读成功后删除。
 - **export**：`--export` 输出 CSV（`--format md|agents`：**未实施**）
 
 ## 9. 验收指标（可证伪）
