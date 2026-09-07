@@ -2,19 +2,24 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const getCurrentWindow = () => window.__TAURI__.window.getCurrentWindow();
 
-let current = null;      // {en, candidates:[...], displayed:{en,zh,note,layer,...}, offline}
+let current = null;
 let seqId = 0;
 
 function $(id) { return document.getElementById(id); }
 
-// 重置修改态: 隐藏编辑区 + 清空输入。切词/新选择时调, 避免上一次的修改状态带过来
 function resetFix() {
   const f = $('fix'); if (!f) return;
   f.classList.remove('on');
   $('fixInput').value = '';
 }
 
+function hideHint() {
+  const h = $('hint');
+  if (h) h.classList.add('off');
+}
+
 function renderHit(t) {
+  hideHint();
   $('term').textContent = t.en;
   $('zh').textContent = t.zh || '';
   $('note').textContent = t.note || '';
@@ -41,8 +46,9 @@ function renderCandidates(cands) {
 }
 
 async function showTerms(terms) {
-  // 新 selection, 一定重置修改态 (即便 terms 为空)
+  const id = ++seqId;
   resetFix();
+  hideHint();
   if (!terms || terms.length === 0) {
     $('term').textContent = '(未提取到英文术语)';
     $('zh').textContent = ''; $('note').textContent = '';
@@ -51,13 +57,32 @@ async function showTerms(terms) {
     return;
   }
   current = { terms, idx: 0 };
-  await renderTerm(0);
+  await renderTerm(0, id);
 }
 
-async function renderTerm(i) {
-  current.idx = i;
-  // 切词时也重置: 换词不带着上一次的修改框
+function showSelectionFailed(msg) {
+  const id = ++seqId;
   resetFix();
+  hideHint();
+  current = null;
+  $('term').textContent = '未取到新划选';
+  $('zh').textContent = '';
+  $('note').textContent = msg || '剪贴板未变化，已中止（未查询、未上云）';
+  $('acts').style.display = 'none';
+  $('cands').innerHTML = '';
+  $('loading').textContent = '';
+  $('offline').style.display = 'none';
+  $('layer').textContent = '';
+  $('domain').textContent = '';
+  return id;
+}
+
+async function renderTerm(i, incomingId) {
+  const id = incomingId === undefined ? ++seqId : incomingId;
+  if (id !== seqId) return;
+  current.idx = i;
+  resetFix();
+  hideHint();
   const en = current.terms[i];
   $('term').textContent = en;
   $('zh').textContent = ''; $('note').textContent = ''; $('cands').innerHTML = '';
@@ -70,10 +95,11 @@ async function renderTerm(i) {
   try {
     res = await invoke('lookup', { en });
   } catch (e) {
+    if (id !== seqId) return;
     $('loading').textContent = '本地查询失败: ' + e;
     return;
   }
-  const id = ++seqId;
+  if (id !== seqId) return;
 
   if (res.hit) {
     $('loading').textContent = '';
@@ -83,7 +109,13 @@ async function renderTerm(i) {
     return;
   }
 
-  // 本地未命中 → 云端兜底（仅传术语单词，H1）
+  if (res.candidates && res.candidates.length > 0) {
+    $('loading').textContent = '多候选，请点选（未猜、未上云）';
+    renderCandidates(res.candidates);
+    $('acts').style.display = 'flex';
+    return;
+  }
+
   $('loading').textContent = '本地未命中，云端兜底…';
   try {
     const cloud = await invoke('fallback', { en });
@@ -103,12 +135,15 @@ async function renderTerm(i) {
   }
 }
 
-// 动作按钮
 $('bAdopt').onclick = async () => {
   if (!current || !current.displayed) return;
   const d = current.displayed;
-  await invoke('adopt', { en: d.en, zh: d.zh, domain: d.domain || 'general', note: d.note || '' });
-  flash('已沉淀到个人层');
+  try {
+    await invoke('adopt', { en: d.en, zh: d.zh, domain: d.domain || 'general', note: d.note || '' });
+    flash('已沉淀到个人层');
+  } catch (e) {
+    flash('采纳失败: ' + e);
+  }
 };
 $('bFix').onclick = () => {
   const f = $('fix');
@@ -119,14 +154,22 @@ $('bFixOk').onclick = async () => {
   const zh = $('fixInput').value.trim();
   if (!zh || !current) return;
   const d = current.displayed || { en: $('term').textContent };
-  await invoke('fix', { en: d.en, zh });
-  flash('已按你的译法沉淀');
-  resetFix();
+  try {
+    await invoke('fix', { en: d.en, zh });
+    flash('已按你的译法沉淀');
+    resetFix();
+  } catch (e) {
+    flash('修改失败: ' + e);
+  }
 };
 $('bReject').onclick = async () => {
   if (!current || !current.displayed) return;
-  await invoke('reject', { en: current.displayed.en });
-  flash('已否决');
+  try {
+    await invoke('reject', { en: current.displayed.en });
+    flash('已否决');
+  } catch (e) {
+    flash('否决失败: ' + e);
+  }
 };
 
 function flash(msg) {
@@ -134,7 +177,6 @@ function flash(msg) {
   setTimeout(() => { if ($('loading').textContent === msg) $('loading').textContent = ''; }, 1500);
 }
 
-// 多术语切换（右键区域：chips 之外的简单实现——点击 term 循环）
 $('term').style.cursor = 'pointer';
 $('term').onclick = () => {
   if (current && current.terms && current.terms.length > 1) {
@@ -142,24 +184,24 @@ $('term').onclick = () => {
   }
 };
 
-// 键位处理
 window.addEventListener('keydown', e => {
-  // Esc 优先关修改态, 其次隐藏悬浮窗
   if (e.key === 'Escape') {
     if ($('fix').classList.contains('on')) { resetFix(); return; }
     getCurrentWindow().hide();
     return;
   }
-  // Ctrl+Enter 在修改态下直接保存 (Enter 留给 textarea 换行)
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && $('fix').classList.contains('on')) {
     e.preventDefault();
     $('bFixOk').click();
   }
 });
 
-// 初始化事件监听
 listen('terms-requested', event => {
   showTerms(event.payload);
+});
+
+listen('selection-failed', event => {
+  showSelectionFailed(event.payload);
 });
 
 getCurrentWindow().onFocusChanged(({ payload: focused }) => {

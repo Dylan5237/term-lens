@@ -1,8 +1,12 @@
 [package]
 name = "term-lens"
-version = "0.1.1"
-description = "AI 输出中英混杂术语实时注释工具 (Windows)"
+version = "0.1.2"
+description = "Windows 托盘划词注释器 (不是终端透镜)"
 edition = "2021"
+
+[lib]
+name = "term_lens"
+path = "src/lib.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -21,7 +25,7 @@ toml = "0.8"
 dirs = "5"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_System_Console", "Win32_Security"] }
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_System_Console", "Win32_Security", "Win32_Security_Credentials"] }
 
 [profile.release]
 opt-level = "z"
