@@ -70,6 +70,9 @@ struct ProviderCfg {
     /// H1 数据出境最小化: 兜底默认仅传术语单词; 带上下文必须显式开启
     send_context: bool,
     context_chars: usize,
+    /// 推理类后端(如 DeepSeek v4)默认把 token 耗在思考过程, 词典查询无需推理;
+    /// 置 true 时请求携带 "thinking":{"type":"disabled"} 让答案直出。其它后端可置 false
+    reasoning_off: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,12 +97,13 @@ impl Default for HotkeyCfg {
 impl Default for ProviderCfg {
     fn default() -> Self {
         ProviderCfg {
-            base_url: "http://127.0.0.1:10100/v1".into(),
-            api_key: "opencodex-local".into(),
-            model: "opencode-go/deepseek-v4-flash".into(),
+            base_url: "https://api.deepseek.com".into(),
+            api_key: String::new(), // 需在 %APPDATA%\term-lens\config.toml 填入
+            model: "deepseek-v4-flash".into(),
             timeout_ms: 15000,
             send_context: false, // H1
             context_chars: 0,
+            reasoning_off: true, // DeepSeek v4 词典直出
         }
     }
 }
@@ -148,16 +152,19 @@ fn write_if_absent(path: &PathBuf, content: &str) {
 
 const DEFAULT_CONFIG: &str = "# Term Lens 配置 (修改后自动生效: 每次兜底请求时重读)\n\
      # H1 硬约束: send_context 默认 false, 仅传术语单词; 开启前请确认合规\n\
-     # 云端兜底可接任意 OpenAI 兼容 API: 改 base_url/model/api_key 即可\n\
-     #   例: base_url = \"https://api.deepseek.com/v1\"  model = \"deepseek-chat\"\n\
+     # 默认后端 = DeepSeek 官方 API (OpenAI 兼容): 在 platform.deepseek.com 申请 key 填入下方\n\
+     #   也可改 base_url/model/api_key 接任意 OpenAI 兼容 API, 例如:\n\
+     #   base_url = \"http://127.0.0.1:10100/v1\"  model = \"kimi-code/kimi-for-coding\"\n\
      # 没有可用 API 也能用: 仅本地词表, 兜底会显示离线徽标\n\n\
      [provider]\n\
-     base_url = \"http://127.0.0.1:10100/v1\"\n\
-     api_key = \"opencodex-local\"\n\
-     model = \"opencode-go/deepseek-v4-flash\"\n\
+     base_url = \"https://api.deepseek.com\"\n\
+     api_key = \"\"\n\
+     model = \"deepseek-v4-flash\"\n\
      timeout_ms = 15000\n\
      send_context = false\n\
-     context_chars = 0\n\n\
+     context_chars = 0\n\
+     # 推理类后端(DeepSeek v4)关掉思考让答案直出; 换非推理后端可置 false\n\
+     reasoning_off = true\n\n\
      [ui]\n\
      popup_width = 360.0\n\
      popup_height = 230.0\n\
@@ -412,6 +419,14 @@ struct ChatReq {
     messages: Vec<Msg>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    /// 推理后端关闭思考 (DeepSeek v4): 词典结果不被 reasoning 占满 token
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<Thinking>,
+}
+#[derive(Serialize)]
+struct Thinking {
+    #[serde(rename = "type")]
+    kind: String,
 }
 #[derive(Serialize, Deserialize, Clone)]
 struct Msg {
@@ -429,6 +444,11 @@ async fn cloud_lookup(client: &reqwest::Client, en: &str) -> Result<Option<Term>
             Msg { role: "user".into(), content: en.to_string() }, // H1: 仅术语单词
         ],
         max_tokens: Some(300),
+        thinking: if cfg.provider.reasoning_off {
+            Some(Thinking { kind: "disabled".into() })
+        } else {
+            None
+        },
     };
     let url = format!("{}/chat/completions", cfg.provider.base_url.trim_end_matches('/'));
     // 上游路由偶发慢响应: 失败自动重试一次, 平滑超时尖峰

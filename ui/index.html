@@ -32,8 +32,11 @@
            background:#f7f7f8; color:var(--fg); cursor:pointer; }
   button:hover { border-color:var(--accent); }
   button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
-  #fix { display:none; flex:1; }
-  #fix input { width:60%; font-size:12px; padding:3px 6px; border:1px solid var(--border); border-radius:6px; }
+  #fix { display:none; flex-direction:column; gap:6px; margin-top:6px; }
+  #fix.on { display:flex; }
+  #fixInput { width:100%; min-height:54px; max-height:120px; font-size:12px; padding:5px 7px; border:1px solid var(--accent); border-radius:6px; resize:vertical; font-family:inherit; line-height:1.4; outline:none; background:#fff; color:var(--fg); box-sizing:border-box; }
+  #fixRow { display:flex; justify-content:space-between; align-items:center; }
+  #fixHint { font-size:11px; color:var(--muted); }
   #loading { font-size:12px; color:var(--muted); }
 </style>
 </head>
@@ -49,11 +52,17 @@
   <div id="note"></div>
   <div id="loading"></div>
   <div id="cands"></div>
+  <div id="fix">
+    <textarea id="fixInput" rows="2" placeholder="输入正确译法（可多行）"></textarea>
+    <div id="fixRow">
+      <span id="fixHint">Ctrl+Enter 存 · Esc 取消</span>
+      <button id="bFixOk">存</button>
+    </div>
+  </div>
   <div id="acts">
     <button id="bAdopt" class="primary">采纳</button>
     <button id="bFix">修改</button>
     <button id="bReject">否决</button>
-    <span id="fix"><input id="fixInput" placeholder="输入正确译法" /><button id="bFixOk">存</button></span>
   </div>
 </div>
 <script src="main.js"></script>

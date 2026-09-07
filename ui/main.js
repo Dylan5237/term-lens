@@ -7,6 +7,13 @@ let seqId = 0;
 
 function $(id) { return document.getElementById(id); }
 
+// 重置修改态: 隐藏编辑区 + 清空输入。切词/新选择时调, 避免上一次的修改状态带过来
+function resetFix() {
+  const f = $('fix'); if (!f) return;
+  f.classList.remove('on');
+  $('fixInput').value = '';
+}
+
 function renderHit(t) {
   $('term').textContent = t.en;
   $('zh').textContent = t.zh || '';
@@ -34,6 +41,8 @@ function renderCandidates(cands) {
 }
 
 async function showTerms(terms) {
+  // 新 selection, 一定重置修改态 (即便 terms 为空)
+  resetFix();
   if (!terms || terms.length === 0) {
     $('term').textContent = '(未提取到英文术语)';
     $('zh').textContent = ''; $('note').textContent = '';
@@ -47,6 +56,8 @@ async function showTerms(terms) {
 
 async function renderTerm(i) {
   current.idx = i;
+  // 切词时也重置: 换词不带着上一次的修改框
+  resetFix();
   const en = current.terms[i];
   $('term').textContent = en;
   $('zh').textContent = ''; $('note').textContent = ''; $('cands').innerHTML = '';
@@ -99,15 +110,18 @@ $('bAdopt').onclick = async () => {
   await invoke('adopt', { en: d.en, zh: d.zh, domain: d.domain || 'general', note: d.note || '' });
   flash('已沉淀到个人层');
 };
-$('bFix').onclick = () => { $('fix').style.display = $('fix').style.display === 'none' ? 'flex' : 'none'; $('fixInput').focus(); };
+$('bFix').onclick = () => {
+  const f = $('fix');
+  const on = f.classList.toggle('on');
+  if (on) { $('fixInput').focus(); } else { $('fixInput').value = ''; }
+};
 $('bFixOk').onclick = async () => {
   const zh = $('fixInput').value.trim();
   if (!zh || !current) return;
   const d = current.displayed || { en: $('term').textContent };
   await invoke('fix', { en: d.en, zh });
   flash('已按你的译法沉淀');
-  $('fixInput').value = '';
-  $('fix').style.display = 'none';
+  resetFix();
 };
 $('bReject').onclick = async () => {
   if (!current || !current.displayed) return;
@@ -128,9 +142,19 @@ $('term').onclick = () => {
   }
 };
 
-// Esc 隐藏
+// 键位处理
 window.addEventListener('keydown', e => {
-  if (e.key === 'Escape') getCurrentWindow().hide();
+  // Esc 优先关修改态, 其次隐藏悬浮窗
+  if (e.key === 'Escape') {
+    if ($('fix').classList.contains('on')) { resetFix(); return; }
+    getCurrentWindow().hide();
+    return;
+  }
+  // Ctrl+Enter 在修改态下直接保存 (Enter 留给 textarea 换行)
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && $('fix').classList.contains('on')) {
+    e.preventDefault();
+    $('bFixOk').click();
+  }
 });
 
 // 初始化事件监听
