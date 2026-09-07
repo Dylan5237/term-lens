@@ -11,8 +11,10 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
-use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 const DB_NAME: &str = "terms.db";
 
@@ -144,31 +146,30 @@ fn write_if_absent(path: &PathBuf, content: &str) {
     }
 }
 
+const DEFAULT_CONFIG: &str = "# Term Lens 配置 (修改后自动生效: 每次兜底请求时重读)\n\
+     # H1 硬约束: send_context 默认 false, 仅传术语单词; 开启前请确认合规\n\
+     # 云端兜底可接任意 OpenAI 兼容 API: 改 base_url/model/api_key 即可\n\
+     #   例: base_url = \"https://api.deepseek.com/v1\"  model = \"deepseek-chat\"\n\
+     # 没有可用 API 也能用: 仅本地词表, 兜底会显示离线徽标\n\n\
+     [provider]\n\
+     base_url = \"http://127.0.0.1:10100/v1\"\n\
+     api_key = \"opencodex-local\"\n\
+     model = \"opencode-go/deepseek-v4-flash\"\n\
+     timeout_ms = 15000\n\
+     send_context = false\n\
+     context_chars = 0\n\n\
+     [ui]\n\
+     popup_width = 360.0\n\
+     popup_height = 230.0\n\
+     # \"cursor\"=跟随鼠标(默认)  \"fixed\"=固定屏幕右下角\n\
+     position = \"cursor\"\n\n\
+     [hotkey]\n\
+     # \"double_ctrl\"=双击Ctrl(默认)  \"alt_t\"=Alt+T\n\
+     mode = \"double_ctrl\"\n";
+
 fn load_config() -> Config {
     let path = data_dir().join("config.toml");
-    write_if_absent(
-        &path,
-        "# Term Lens 配置 (修改后自动生效: 每次兜底请求时重读)\n\
-         # H1 硬约束: send_context 默认 false, 仅传术语单词; 开启前请确认合规\n\
-         # 云端兜底可接任意 OpenAI 兼容 API: 改 base_url/model/api_key 即可\n\
-         #   例: base_url = \"https://api.deepseek.com/v1\"  model = \"deepseek-chat\"\n\
-         # 没有可用 API 也能用: 仅本地词表, 兜底会显示离线徽标\n\n\
-         [provider]\n\
-         base_url = \"http://127.0.0.1:10100/v1\"\n\
-         api_key = \"opencodex-local\"\n\
-         model = \"opencode-go/deepseek-v4-flash\"\n\
-         timeout_ms = 15000\n\
-         send_context = false\n\
-         context_chars = 0\n\n\
-         [ui]\n\
-         popup_width = 360.0\n\
-         popup_height = 230.0\n\
-         # \"cursor\"=跟随鼠标(默认)  \"fixed\"=固定屏幕右下角\n\
-         position = \"cursor\"\n\n\
-         [hotkey]\n\
-         # \"double_ctrl\"=双击Ctrl(默认)  \"alt_t\"=Alt+T\n\
-         mode = \"double_ctrl\"\n",
-    );
+    write_if_absent(&path, DEFAULT_CONFIG);
     fs::read_to_string(&path)
         .ok()
         .and_then(|s| toml::from_str(&s).ok())
@@ -497,11 +498,14 @@ async fn cloud_lookup(client: &reqwest::Client, en: &str) -> Result<Option<Term>
 
 // ---------- 双击 Ctrl 低级键盘钩子 ----------
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 static LAST_CTRL_UP: AtomicU64 = AtomicU64::new(0);
 static TRIGGER_AT: AtomicU64 = AtomicU64::new(0);
 static HOOK_APP: Mutex<Option<AppHandle>> = Mutex::new(None);
+// 触发方式全局开关: 0=双击 Ctrl  1=Alt+T
+// 托盘菜单可运行时切换 (写 config.toml + 热注册/注销), 无需重启
+static HOTKEY_MODE: AtomicU8 = AtomicU8::new(0);
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -526,6 +530,10 @@ unsafe extern "system" fn ll_hook_proc(code: i32, wparam: windows::Win32::Founda
         CallNextHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, WM_KEYUP,
     };
     if code >= 0 {
+        // Alt+T 模式激活时, 双击 Ctrl 不应响应 (托盘可即时切换)
+        if HOTKEY_MODE.load(Ordering::SeqCst) != 0 {
+            return CallNextHookEx(HHOOK(std::ptr::null_mut()), code, wparam, lparam);
+        }
         let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
         // 跳过注入事件: 我们自己模拟的 Ctrl+C 不能触发钩子 (否则复制→又触发→死循环)
         let injected = (kb.flags.0 & LLKHF_INJECTED.0) != 0;
@@ -888,6 +896,440 @@ fn grab_selection_and_show(app: &AppHandle) {
     });
 }
 
+// ================= 系统托盘 (分组右键菜单) =================
+//
+// 菜单结构 (所有"查看/修改"入口按配置域分组):
+//   翻译当前选中内容             → 与热键同一条触发链路, 即时取词
+//   显示悬浮窗
+//   ─ 词库           查看统计 / 导出CSV / 从数据目录导入CSV / 打开数据目录
+//   ─ 提示词         查看编辑 (fallback_prompt.md) / 恢复默认
+//   ─ 大模型连接     查看配置 / 测试连接 / 编辑配置 (config.toml) / 恢复默认
+//   ─ 界面与热键     弹窗位置(勾选) / 触发方式(勾选) / 弹窗尺寸提示
+//   ─ 退出
+//
+// 即时生效原则 (改完即用, 无需重启):
+//   * provider.* + fallback_prompt.md → 每次云端请求前重读 (cloud_lookup/load_prompt)
+//   * ui.position                     → 每次触发悬浮时重读 (grab_selection_and_show)
+//   * hotkey.mode                     → HOTKEY_MODE 开关 + 全局快捷键注册/注销, 运行时切换
+//   所有变更同时落盘 config.toml, 重启后保持。
+
+fn mi<'a>(item: &'a impl tauri::menu::IsMenuItem<tauri::Wry>) -> &'a dyn tauri::menu::IsMenuItem<tauri::Wry> {
+    item
+}
+
+/// 不丢注释地改写 config.toml 中某字段值 (保注释 = 用户自己写的说明不会被清掉)
+fn patch_config_field(key: &str, value: &str) -> Result<(), String> {
+    let path = data_dir().join("config.toml");
+    let raw = fs::read_to_string(&path).map_err(|e| format!("读取配置失败: {e}"))?;
+    let re = Regex::new(&format!(r#"(?m)^([ \t]*{0}[ \t]*=[ \t]*)"[^"]*""#, regex::escape(key)))
+        .map_err(|e| e.to_string())?;
+    if !re.is_match(&raw) {
+        return Err(format!("配置中找不到 {key} 字段, 请手动编辑 config.toml"));
+    }
+    let out = re.replace(&raw, format!("$1\"{value}\"")).to_string();
+    fs::write(&path, out).map_err(|e| format!("写回配置失败: {e}"))
+}
+
+// 保注释重写整个配置文件 (恢复默认用)
+fn write_default_config() -> Result<(), String> {
+    let path = data_dir().join("config.toml");
+    fs::write(&path, DEFAULT_CONFIG).map_err(|e| e.to_string())
+}
+
+fn write_default_prompt() -> Result<(), String> {
+    let path = data_dir().join("fallback_prompt.md");
+    fs::write(&path, FALLBACK_PROMPT).map_err(|e| e.to_string())
+}
+
+// ---------- 原生提示框 (零新依赖: 复用已引入的 windows crate) ----------
+
+fn native_box(title: &str, text: &str, yesno: bool) -> Option<bool> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            MessageBoxW, IDNO, IDYES, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION,
+            MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MESSAGEBOX_RESULT,
+        };
+        let enc = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+        let t = enc(title);
+        let b = enc(text);
+        let style = if yesno { MB_YESNO | MB_ICONQUESTION } else { MB_OK | MB_ICONINFORMATION };
+        let r: MESSAGEBOX_RESULT = unsafe {
+            MessageBoxW(None, windows::core::PCWSTR(b.as_ptr()), windows::core::PCWSTR(t.as_ptr()), style)
+        };
+        return if yesno { Some(r == IDYES) } else { Some(r != MESSAGEBOX_RESULT(0)) };
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        println!("[{title}] {text}");
+        Some(true)
+    }
+}
+
+fn info_box(title: &str, text: &str) {
+    native_box(&format!("TermLens - {title}"), text, false);
+}
+fn err_box(title: &str, text: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK, MESSAGEBOX_STYLE};
+        let enc = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+        let t = enc(&format!("TermLens - {title}"));
+        let b = enc(text);
+        unsafe {
+            MessageBoxW(None, windows::core::PCWSTR(b.as_ptr()), windows::core::PCWSTR(t.as_ptr()), MB_OK | MB_ICONERROR);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    println!("[TermLens - {title}] {text}");
+}
+fn confirm_box(title: &str, text: &str) -> bool {
+    native_box(&format!("TermLens - {title}"), text, true).unwrap_or(false)
+}
+
+// ---------- 文件/目录打开 ----------
+
+fn open_in_notepad(path: &std::path::Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        return std::process::Command::new("notepad").arg(path).spawn().is_ok();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+fn explorer_select(path: &std::path::Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        return std::process::Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()
+            .is_ok();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+fn open_dir(path: &std::path::Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        return std::process::Command::new("explorer").arg(path).spawn().is_ok();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+// ---------- 分组菜单构建 ----------
+
+fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let cfg = load_config();
+    let hk_alt = cfg.hotkey.mode == "alt_t";
+    let pos_fixed = cfg.ui.position == "fixed";
+
+    // 顶层
+    let m_translate = MenuItem::with_id(app, "act_translate", "翻译当前选中内容", true, None::<&str>)?;
+    let m_show = MenuItem::with_id(app, "act_show", "显示悬浮窗", true, None::<&str>)?;
+    let m_quit = MenuItem::with_id(app, "quit", "退出 TermLens", true, None::<&str>)?;
+    let sep_a = PredefinedMenuItem::separator(app)?;
+    let sep_b = PredefinedMenuItem::separator(app)?;
+
+    // ─ 词库
+    let lib_stats = MenuItem::with_id(app, "lib_stats", "查看词库统计", true, None::<&str>)?;
+    let lib_export = MenuItem::with_id(app, "lib_export", "导出词库 CSV (并打开所在目录)", true, None::<&str>)?;
+    let lib_rescan = MenuItem::with_id(app, "lib_rescan", "从数据目录导入 CSV 词条", true, None::<&str>)?;
+    let sep_lib = PredefinedMenuItem::separator(app)?;
+    let lib_open = MenuItem::with_id(app, "lib_open", "打开词库数据目录", true, None::<&str>)?;
+    let sub_lib = Submenu::with_items(app, "词库", true, &[
+        mi(&lib_stats), mi(&lib_export), mi(&lib_rescan), mi(&sep_lib), mi(&lib_open),
+    ])?;
+
+    // ─ 提示词
+    let pr_view = MenuItem::with_id(app, "pr_view", "查看 / 编辑提示词文件", true, None::<&str>)?;
+    let pr_reset = MenuItem::with_id(app, "pr_reset", "恢复默认提示词", true, None::<&str>)?;
+    let sub_pr = Submenu::with_items(app, "提示词 (云端兜底词典)", true, &[mi(&pr_view), mi(&pr_reset)])?;
+
+    // ─ 大模型连接
+    let cn_view = MenuItem::with_id(app, "cn_view", "查看当前连接配置", true, None::<&str>)?;
+    let cn_test = MenuItem::with_id(app, "cn_test", "测试云端连接", true, None::<&str>)?;
+    let cn_edit = MenuItem::with_id(app, "cn_edit", "编辑配置文件 config.toml", true, None::<&str>)?;
+    let cn_reset = MenuItem::with_id(app, "cn_reset", "恢复默认配置", true, None::<&str>)?;
+    let sub_cn = Submenu::with_items(app, "大模型连接", true, &[
+        mi(&cn_view), mi(&cn_test), mi(&cn_edit), mi(&cn_reset),
+    ])?;
+
+    // ─ 界面与热键
+    let t_pos = MenuItem::with_id(app, "t_pos", "弹窗位置", false, None::<&str>)?;
+    let pos_cursor = CheckMenuItem::with_id(app, "pos_cursor", "跟随鼠标 (默认)", true, !pos_fixed, None::<&str>)?;
+    let pos_fixed_c = CheckMenuItem::with_id(app, "pos_fixed", "固定屏幕右下角", true, pos_fixed, None::<&str>)?;
+    let sep_ui = PredefinedMenuItem::separator(app)?;
+    let t_hk = MenuItem::with_id(app, "t_hk", "触发方式", false, None::<&str>)?;
+    let hk_double = CheckMenuItem::with_id(app, "hk_double", "双击 Ctrl", true, !hk_alt, None::<&str>)?;
+    let hk_alt_c = CheckMenuItem::with_id(app, "hk_alt", "Alt + T", true, hk_alt, None::<&str>)?;
+    let sep_ui2 = PredefinedMenuItem::separator(app)?;
+    let ui_size = MenuItem::with_id(app, "ui_size", "悬浮窗尺寸: 改 config.toml [ui]", false, None::<&str>)?;
+    let sub_ui = Submenu::with_items(app, "界面与热键", true, &[
+        mi(&t_pos), mi(&pos_cursor), mi(&pos_fixed_c), mi(&sep_ui),
+        mi(&t_hk), mi(&hk_double), mi(&hk_alt_c), mi(&sep_ui2), mi(&ui_size),
+    ])?;
+
+    let menu = Menu::with_items(app, &[
+        mi(&m_translate), mi(&m_show), mi(&sep_a),
+        mi(&sub_lib), mi(&sub_pr), mi(&sub_cn), mi(&sub_ui),
+        mi(&sep_b), mi(&m_quit),
+    ])?;
+    Ok(menu)
+}
+
+/// 托盘菜单重建 (勾选状态跟随 config 变化) —— 切换后即见新状态
+fn refresh_tray_menu(app: &AppHandle) {
+    match build_menu(app) {
+        Ok(menu) => {
+            if let Some(tray) = app.tray_by_id("main") {
+                let _ = tray.set_menu(Some(menu));
+            }
+        }
+        Err(e) => tl_log(&format!("rebuild tray menu failed: {e}")),
+    }
+}
+
+fn mask_api_key(k: &str) -> String {
+    if k.len() <= 8 {
+        return "****".into();
+    }
+    format!("{}…{}", &k[..4], &k[k.len() - 2..])
+}
+
+fn provider_summary() -> String {
+    let cfg = load_config();
+    let pr = data_dir().join("fallback_prompt.md");
+    let pr_chars = fs::read_to_string(&pr).map(|s| s.chars().count()).unwrap_or(0);
+    format!(
+        "Base URL : {}\nModel    : {}\nAPI Key  : {}\n\nSend Ctx : {}  (H1 硬约束, 默认 false 仅传术语单词)\nTimeout  : {} ms\n\n提示词文件: fallback_prompt.md ({} 字符)\n修改后每次请求自动重读, 无需重启。\n数据目录: {}",
+        cfg.provider.base_url,
+        cfg.provider.model,
+        mask_api_key(&cfg.provider.api_key),
+        cfg.provider.send_context,
+        cfg.provider.timeout_ms,
+        pr_chars,
+        data_dir().display(),
+    )
+}
+
+fn stats_text() -> String {
+    let conn = Connection::open(data_dir().join(DB_NAME)).ok();
+    match conn {
+        Some(c) => {
+            let s = stats_db(&c);
+            let total: i64 = c.query_row("SELECT COUNT(*) FROM terms", [], |r| r.get(0)).unwrap_or(0);
+            let pending: i64 = c.query_row("SELECT COUNT(*) FROM terms WHERE status='pending'", [], |r| r.get(0)).unwrap_or(0);
+            let personal: i64 = c.query_row("SELECT COUNT(*) FROM terms WHERE layer='personal'", [], |r| r.get(0)).unwrap_or(0);
+            let by_domain: i64 = c.query_row("SELECT COUNT(DISTINCT en) FROM terms WHERE status='active'", [], |r| r.get(0)).unwrap_or(0);
+            format!(
+                "词条总数   : {} (活动 {} 个)\n  经典层 ms / AI 层 ai / 个人层 personal = {} 个个人词条\n待确认     : {} 个 (云端兜底结果, 可在悬浮窗\"采纳/否决\")\n\n本地命中率 : {:.2}%\n查询总次数 : {}  本地 P95: {} ms\n\n去重词条   : {}\n\n导出文件   : export_terms.csv\n数据目录   : {}",
+                total,
+                s["active_terms"].as_i64().unwrap_or(0),
+                personal,
+                pending,
+                s["local_hit_rate"].as_f64().unwrap_or(0.0) * 100.0,
+                s["queries_total"].as_i64().unwrap_or(0),
+                s["local_p95_ms"].as_i64().unwrap_or(0),
+                by_domain,
+                data_dir().display(),
+            )
+        }
+        None => "无法打开词库数据库".into(),
+    }
+}
+
+// ---------- 菜单动作分发 ----------
+
+fn tray_menu_event(app: &AppHandle, id: &str) {
+    let st = app.state::<AppState>();
+    match id {
+        "act_translate" => grab_selection_and_show(app),
+        "act_show" => {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }
+        // ─ 词库
+        "lib_stats" => info_box("词库统计", &stats_text()),
+        "lib_export" => {
+            let n: i64 = st.db.lock().unwrap()
+                .query_row("SELECT COUNT(*) FROM terms WHERE status='active'", [], |r| r.get(0)).unwrap_or(0);
+            let path = export_db(&st.db.lock().unwrap());
+            let opened = explorer_select(&std::path::Path::new(&path));
+            info_box("词库导出", &format!("已导出 {n} 条活动词条 →\n{path}\n\n{}", if opened { "已打开所在文件夹。" } else { "请手动到数据目录查看。" }));
+        }
+        "lib_rescan" => {
+            let dir = data_dir();
+            let mut total = 0usize;
+            let mut files: Vec<(String, usize)> = Vec::new();
+            if let Ok(rd) = fs::read_dir(&dir) {
+                let mut names: Vec<std::path::PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.extension().map(|x| x == "csv").unwrap_or(false))
+                    .filter(|p| p.file_name().and_then(|n| n.to_str()).map(|n| n != "export_terms.csv").unwrap_or(false))
+                    .collect();
+                names.sort();
+                for p in names {
+                    let n = import_csv(&st.db.lock().unwrap(), &p);
+                    if n > 0 {
+                        total += n;
+                        files.push((p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(), n));
+                    }
+                }
+            }
+            if files.is_empty() {
+                info_box("词库导入", "没有新增词条。\n\n说明: 把 CSV 放到数据目录后再次点击此项即可导入; 已存在的词条不会被覆盖 (只增不改)。");
+            } else {
+                let list = files.iter().map(|(f, n)| format!("  {f}: +{n}")).collect::<Vec<_>>().join("\n");
+                info_box("词库导入", &format!("共导入 {total} 条新词条:\n{list}\n\n数据目录: {}", dir.display()));
+            }
+        }
+        "lib_open" => {
+            if !open_dir(&data_dir()) {
+                err_box("打开目录", &("无法打开资源管理器, 请手动访问:\n".to_owned() + &data_dir().display().to_string()));
+            }
+        }
+        // ─ 提示词
+        "pr_view" => {
+            let p = data_dir().join("fallback_prompt.md");
+            if !open_in_notepad(&p) {
+                err_box("打开提示词", &("无法调用记事本, 请手动编辑:\n".to_owned() + &p.display().to_string()));
+            }
+        }
+        "pr_reset" => {
+            if confirm_box("恢复默认提示词", "将把 fallback_prompt.md 重置为内置默认词典规则。\n你自己的修改会丢失, 确认继续?") {
+                match write_default_prompt() {
+                    Ok(()) => info_box("恢复默认提示词", "已恢复默认。下一次云端兜底请求即使用默认提示词。"),
+                    Err(e) => err_box("恢复失败", &e),
+                }
+            }
+        }
+        // ─ 大模型连接
+        "cn_view" => info_box("大模型连接", &provider_summary()),
+        "cn_test" => {
+            // 独立线程发最小 chat 请求, 避免卡菜单事件循环
+            let client = st.client.clone();
+            tauri::async_runtime::spawn(async move {
+                let cfg = load_config();
+                let url = format!("{}/chat/completions", cfg.provider.base_url.trim_end_matches('/'));
+                let body = serde_json::json!({
+                    "model": cfg.provider.model,
+                    "messages": [{"role":"user","content":"ping"}],
+                    "max_tokens": 1,
+                });
+                let r = client.post(&url)
+                    .header("Authorization", format!("Bearer {}", cfg.provider.api_key))
+                    .json(&body)
+                    .timeout(std::time::Duration::from_millis(cfg.provider.timeout_ms))
+                    .send()
+                    .await;
+                match r {
+                    Ok(resp) if resp.status().is_success() => {
+                        info_box("连接测试", &format!("✓ 连接成功\n\nBase URL : {}\nModel    : {}\n\n响应状态: HTTP {}\n\n说明: 云端兜底仅在本地词库未命中时使用。", cfg.provider.base_url, cfg.provider.model, resp.status().as_u16()));
+                    }
+                    Ok(resp) => err_box("连接测试", &format!("云端返回 HTTP {}\n\nBase URL: {}\n请检查 config.toml 的 base_url / api_key / model。", resp.status().as_u16(), cfg.provider.base_url)),
+                    Err(e) => err_box("连接测试", &format!("请求失败: {}\n\nBase URL: {}\n\n常见原因:\n1. 本地代理(opencodex)未启动\n2. base_url 不可达 (需要外网/代理)\n3. 网络中断", err_chain(&e), cfg.provider.base_url)),
+                }
+            });
+        }
+        "cn_edit" => {
+            let p = data_dir().join("config.toml");
+            if !open_in_notepad(&p) {
+                err_box("打开配置", &("无法调用记事本, 请手动编辑:\n".to_owned() + &p.display().to_string()));
+            }
+        }
+        "cn_reset" => {
+            if confirm_box("恢复默认配置", "将 config.toml 重置为内置默认值 (本地 opencodex 代理)。\n你配置的 base_url/api_key/model 会被覆盖, 确认继续?") {
+                match write_default_config() {
+                    Ok(()) => {
+                        HOTKEY_MODE.store(0, Ordering::SeqCst);
+                        refresh_tray_menu(app);
+                        info_box("恢复默认配置", "已恢复默认。\n- 大模型连接 / 弹窗位置: 下次使用即时生效\n- 触发方式: 已切回 双击 Ctrl (即时生效)");
+                    }
+                    Err(e) => err_box("恢复失败", &e),
+                }
+            }
+        }
+        // ─ 界面与热键 (写盘 + 重建菜单勾选 → 即时生效)
+        "pos_cursor" | "pos_fixed" => {
+            let v = if id == "pos_fixed" { "fixed" } else { "cursor" };
+            match patch_config_field("position", v) {
+                Ok(()) => {
+                    refresh_tray_menu(app);
+                    info_box("弹窗位置", if v == "fixed" { "已切换为: 固定屏幕右下角。\n下一次触发悬浮即生效。" } else { "已切换为: 跟随鼠标。\n下一次触发悬浮即生效。" });
+                }
+                Err(e) => err_box("切换失败", &e),
+            }
+        }
+        "hk_double" | "hk_alt" => {
+            let alt = id == "hk_alt";
+            // 1) 落盘 (重启后保持)
+            if let Err(e) = patch_config_field("mode", if alt { "alt_t" } else { "double_ctrl" }) {
+                err_box("切换失败", &e);
+                return;
+            }
+            // 2) 内存开关 + 全局快捷键注册/注销 (即时生效)
+            let sc = Shortcut::new(Some(Modifiers::ALT), Code::KeyT);
+            if alt {
+                HOTKEY_MODE.store(1, Ordering::SeqCst);
+                match app.global_shortcut().register(sc) {
+                    Ok(()) => {}
+                    Err(e) => err_box("注册失败", &format!("Alt+T 注册失败: {e}\n可能被其它程序占用。可保持双击 Ctrl 使用。")),
+                }
+            } else {
+                HOTKEY_MODE.store(0, Ordering::SeqCst);
+                let _ = app.global_shortcut().unregister(sc);
+            }
+            refresh_tray_menu(app);
+            info_box("触发方式", if alt { "已切换为 Alt+T, 即时生效。\n\n说明: Alt+T 需在目标程序内先划选文本, 再按组合键取词翻译。" } else { "已切换为 双击 Ctrl, 即时生效。\n\n说明: 在任意程序划选文本后快速按两下 Ctrl 即可取词翻译。" });
+        }
+        "quit" => {
+            if confirm_box("退出", "确定退出 TermLens?\n\n退出后热键与托盘将失效; 重新打开安装目录下的 TermLens.exe 即可恢复。") {
+                app.exit(0);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    let handle = app.handle();
+    let menu = build_menu(handle)?;
+    let mut builder = TrayIconBuilder::with_id("main")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| {
+            let id = event.id().as_ref().to_string();
+            tray_menu_event(app, &id);
+        })
+        .on_tray_icon_event(|tray, event| {
+            // 左键单击托盘 → 显示悬浮窗 (右键已弹出菜单)
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                if let Some(w) = tray.app_handle().get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(handle)?;
+    Ok(())
+}
+
 fn main() {
     // CLI 子命令先于互斥体判断
     let arg = std::env::args().nth(1).unwrap_or_default();
@@ -961,7 +1403,6 @@ fn main() {
         client,
     };
 
-    let mode = load_config().hotkey.mode.clone();
     let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::KeyT);
 
     tauri::Builder::default()
@@ -969,6 +1410,7 @@ fn main() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, _sc, ev| {
+                    // 快捷键事件只在 Alt+T 已注册时产生; 双击 Ctrl 走低级钩子, 不经过这里
                     if ev.state() == ShortcutState::Pressed {
                         grab_selection_and_show(app);
                     }
@@ -976,13 +1418,20 @@ fn main() {
                 .build(),
         )
         .setup(move |app| {
-            use tauri_plugin_global_shortcut::GlobalShortcutExt;
-            if mode == "alt_t" {
-                let _ = app.global_shortcut().register(shortcut);
-            } else {
-                #[cfg(target_os = "windows")]
-                start_double_ctrl_hook(app.handle().clone());
+            // 按 config 决定初始触发方式 (托盘菜单可运行时切换)
+            let hk_alt = load_config().hotkey.mode == "alt_t";
+            HOTKEY_MODE.store(if hk_alt { 1 } else { 0 }, Ordering::SeqCst);
+            if hk_alt {
+                if let Err(e) = app.global_shortcut().register(shortcut) {
+                    tl_log(&format!("alt_t register failed: {e}"));
+                }
             }
+            // 双击 Ctrl 钩子线程常驻 (内部按 HOTKEY_MODE 自行决定是否响应), 保证可随时切回
+            #[cfg(target_os = "windows")]
+            start_double_ctrl_hook(app.handle().clone());
+            // 系统托盘 (分组右键菜单)
+            build_tray(app)?;
+            tl_log("tray ready");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
