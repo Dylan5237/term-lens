@@ -4,10 +4,10 @@ use crate::config::{
     default_timeout_ms, http_client_for, load_config, load_prompt, resolve_api_key,
     should_send_cloud_request, validate_base_url,
 };
-use crate::glossary::Term;
+use crate::glossary::{Term, MAX_TERM_CHARS};
 use serde::{Deserialize, Serialize};
 
-pub const MAX_FALLBACK_TERM_CHARS: usize = 64;
+pub const MAX_FALLBACK_TERM_CHARS: usize = MAX_TERM_CHARS;
 
 #[derive(Serialize)]
 struct ChatReq {

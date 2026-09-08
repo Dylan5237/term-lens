@@ -3,7 +3,6 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use enigo::{Enigo, Keyboard, Settings as EnigoSettings};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -101,52 +100,17 @@ fn grab_selection_and_show(app: &AppHandle) {
     let _busy = GrabGuard;
     wait_modifiers_released();
 
-    let saved = arboard::Clipboard::new()
-        .and_then(|mut c| c.get_text())
-        .ok();
-
-    let mut enigo = match Enigo::new(&EnigoSettings::default()) {
-        Ok(e) => e,
-        Err(e) => {
-            tl_log(&format!("enigo failed: {e}"));
-            emit_selection_failed(app, "模拟复制失败");
+    let selected = match read_os_selection() {
+        Some(s) => s,
+        None => {
+            tl_log("os selection empty, abort lookup");
+            emit_selection_failed(
+                app,
+                "未能读取当前选区。请先划选再取词；终端等应用暂不支持。剪贴板里若是截图/文件则无法回退复制。",
+            );
             return;
         }
     };
-    use enigo::Direction::{Press, Release};
-    let _ = enigo.key(enigo::Key::Control, Press);
-    let _ = enigo.key(enigo::Key::Unicode('c'), Press);
-    let _ = enigo.key(enigo::Key::Unicode('c'), Release);
-    let _ = enigo.key(enigo::Key::Control, Release);
-
-    let mut decision = GrabDecision::Unchanged;
-    for _ in 0..13 {
-        std::thread::sleep(std::time::Duration::from_millis(30));
-        let cur = arboard::Clipboard::new()
-            .and_then(|mut c| c.get_text())
-            .ok();
-        decision = decide_grab(saved.as_deref(), cur.as_deref());
-        if decision.should_lookup() {
-            break;
-        }
-    }
-
-    if let Some(old) = saved {
-        if let Ok(mut c) = arboard::Clipboard::new() {
-            let _ = c.set_text(old);
-        }
-    }
-
-    if !decision.should_lookup() {
-        tl_log("clipboard unchanged, abort lookup");
-        emit_selection_failed(
-            app,
-            "剪贴板未变化，已中止（未查询、未上云）。请先划选文本再取词。",
-        );
-        return;
-    }
-
-    let selected = decision.text().unwrap_or("").to_string();
     if let Some(st) = app.try_state::<AppState>() {
         *st.last_selection.lock().unwrap() = selected.clone();
     }

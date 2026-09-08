@@ -4,6 +4,7 @@ pub mod capture;
 pub mod config;
 pub mod fallback;
 pub mod glossary;
+pub mod selection;
 
 pub use capture::*;
 pub use config::*;
@@ -11,6 +12,7 @@ pub use fallback::{
     cloud_lookup, cloud_preflight, err_chain, validate_fallback_term, MAX_FALLBACK_TERM_CHARS,
 };
 pub use glossary::*;
+pub use selection::read_os_selection;
 
 #[cfg(test)]
 mod tests {
@@ -28,6 +30,59 @@ mod tests {
             terms.iter().any(|t| t.eq_ignore_ascii_case("Agent")),
             "CJK 紧贴应抽出 Agent, got {terms:?}"
         );
+    }
+
+    #[test]
+    fn extract_snake_and_kebab_as_one_term() {
+        assert_eq!(
+            extract_terms("blocked_field"),
+            vec![
+                "blocked_field".to_string(),
+                "blocked".into(),
+                "field".into()
+            ]
+        );
+        assert_eq!(extract_terms("huge-doge")[0], "huge-doge");
+        assert_eq!(extract_terms("blocked_field_name")[0], "blocked_field_name");
+        let cjk = extract_terms("一个blocked_field实例");
+        assert_eq!(cjk[0], "blocked_field");
+        let phrase = extract_terms("tool use");
+        assert_eq!(phrase[0], "tool use");
+        assert!(phrase.iter().any(|t| t == "tool"));
+    }
+
+    #[test]
+    fn extract_camel_case_as_one_term() {
+        let terms = extract_terms("blockedField");
+        assert_eq!(terms[0], "blockedField");
+        assert!(terms.iter().any(|t| t == "blocked"));
+        assert!(terms.iter().any(|t| t == "Field"));
+        let xml = extract_terms("XMLHttpRequest");
+        assert_eq!(xml[0], "XMLHttpRequest");
+        assert!(xml.iter().any(|t| t == "XML"));
+        assert!(xml.iter().any(|t| t == "Http"));
+        assert!(xml.iter().any(|t| t == "Request"));
+        assert_eq!(extract_terms("HTTPS")[0], "HTTPS");
+    }
+
+    #[test]
+    fn extract_short_selection_phrase_first() {
+        assert_eq!(extract_terms("Common Template")[0], "Common Template");
+        assert_eq!(
+            extract_terms("Host-specific Fragment")[0],
+            "Host-specific Fragment"
+        );
+        assert_eq!(extract_terms("Tool Use")[0], "Tool Use");
+        assert_eq!(extract_terms("context window")[0], "context window");
+        assert_eq!(extract_terms("  Common   Template  ")[0], "Common Template");
+        let sentence = extract_terms("The Runtime is ready");
+        assert_ne!(sentence[0], "The Runtime is ready");
+        assert!(sentence.iter().any(|t| t.eq_ignore_ascii_case("Runtime")));
+        let listed = extract_terms("foo, bar, baz");
+        assert_ne!(listed.first().map(String::as_str), Some("foo, bar, baz"));
+        assert!(listed.iter().any(|t| t == "foo"));
+        let over = extract_terms("one two three four five");
+        assert_ne!(over[0], "one two three four five");
     }
 
     #[test]
@@ -189,15 +244,26 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_unchanged_does_not_query() {
-        let d = decide_grab(Some("old"), Some("old"));
-        assert_eq!(d, GrabDecision::Unchanged);
-        assert!(!d.should_lookup());
-        let d2 = decide_grab(Some("old"), Some("new term"));
-        assert!(d2.should_lookup());
-        assert_eq!(d2.text(), Some("new term"));
-        let d3 = decide_grab(Some("keep"), None);
-        assert!(!d3.should_lookup());
+    fn accept_selection_allows_same_word_twice() {
+        assert_eq!(accept_selection_text("api_key"), Some("api_key".into()));
+        assert_eq!(accept_selection_text("  api_key  "), Some("api_key".into()));
+        assert!(accept_selection_text("   ").is_none());
+    }
+
+    #[test]
+    fn clipboard_probe_ignores_sentinel_and_keeps_same_word() {
+        let sentinel = "\u{2060}tl-sel-probe\u{2060}";
+        assert!(clipboard_after_probe(sentinel, Some(sentinel)).is_none());
+        assert!(clipboard_after_probe(sentinel, None).is_none());
+        assert_eq!(
+            clipboard_after_probe(sentinel, Some("Automation")),
+            Some("Automation".into())
+        );
+        assert_eq!(
+            clipboard_after_probe(sentinel, Some("  Automation  ")),
+            Some("Automation".into())
+        );
+        assert!(clipboard_after_probe(sentinel, Some("   ")).is_none());
     }
 
     #[test]
@@ -254,6 +320,8 @@ mod tests {
     fn fallback_term_rejects_documents() {
         assert!(validate_fallback_term("Agent").is_ok());
         assert!(validate_fallback_term("tool use").is_ok());
+        assert!(validate_fallback_term("blocked_field").is_ok());
+        assert!(validate_fallback_term("huge-doge").is_ok());
         assert!(validate_fallback_term(&"word ".repeat(40)).is_err());
         assert!(validate_fallback_term("line1\nline2").is_err());
         assert!(validate_fallback_term("foo; DROP TABLE").is_err());

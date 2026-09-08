@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 
 pub const SCHEMA_VERSION: i64 = 1;
 pub const MAX_EXTRACT: usize = 8;
+pub const MAX_TERM_CHARS: usize = 64;
+pub const MAX_SHORT_TERM_SEGMENTS: usize = 4;
 pub const SEED_CLASSIC: &str = include_str!("../../data/seed_terms.csv");
 pub const SEED_AI: &str = include_str!("../../data/ai_terms_latest.csv");
 
@@ -398,11 +400,80 @@ pub fn is_stopword(w: &str) -> bool {
     STOPWORDS.contains(&w.to_ascii_lowercase().as_str())
 }
 
-fn is_connector(c: char) -> bool {
-    matches!(c, ' ' | '_' | '-')
+fn is_ident_joiner(c: char) -> bool {
+    matches!(c, '_' | '-')
 }
 
-/// 按 ASCII 字母数字切词（CJK 紧贴视为边界）。返回 (词, 后接连接符)。
+/// 选区本身像术语时返回规范化原文（空白压成单空格）。
+/// 句子、列表、代码、含停用词、超过 4 词段或 64 字 → None，只抽内部标识符。
+fn short_term_selection(text: &str) -> Option<String> {
+    let t = text.trim();
+    if t.is_empty() || t.chars().count() > MAX_TERM_CHARS {
+        return None;
+    }
+    if t.contains('\n') || t.contains('\r') {
+        return None;
+    }
+    if t.chars()
+        .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, ' ' | '\t' | '_' | '-')))
+    {
+        return None;
+    }
+    let tokens = ascii_tokens(t);
+    if tokens.is_empty() || tokens.len() > MAX_SHORT_TERM_SEGMENTS {
+        return None;
+    }
+    if tokens.iter().any(|(w, _)| is_stopword(w)) {
+        return None;
+    }
+    Some(t.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// XMLHttpRequest → XML, Http, Request；全大写/全小写不拆。
+fn split_camel(s: &str) -> Vec<String> {
+    if s.is_empty() {
+        return Vec::new();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let has_lower = chars.iter().any(|c| c.is_ascii_lowercase());
+    let has_upper = chars.iter().any(|c| c.is_ascii_uppercase());
+    if !has_lower || !has_upper {
+        return vec![s.to_string()];
+    }
+    let mut out = Vec::new();
+    let mut start = 0;
+    for i in 1..chars.len() {
+        let prev = chars[i - 1];
+        let cur = chars[i];
+        let next = chars.get(i + 1).copied();
+        let boundary = (prev.is_ascii_lowercase() && cur.is_ascii_uppercase())
+            || (prev.is_ascii_uppercase()
+                && cur.is_ascii_uppercase()
+                && next.is_some_and(|n| n.is_ascii_lowercase()))
+            || (prev.is_ascii_alphabetic() && cur.is_ascii_digit())
+            || (prev.is_ascii_digit() && cur.is_ascii_alphabetic());
+        if boundary {
+            out.push(chars[start..i].iter().collect());
+            start = i;
+        }
+    }
+    out.push(chars[start..].iter().collect());
+    out
+}
+
+fn ident_parts(word: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for chunk in word.split(is_ident_joiner) {
+        if chunk.is_empty() {
+            continue;
+        }
+        out.extend(split_camel(chunk));
+    }
+    out
+}
+
+/// 按 ASCII 字母数字切词（CJK 紧贴视为边界）。`_` / `-` 夹在词段之间时并入同一标识符。
+/// 返回 (词, 后接空格)——空格仍用于短语 bigram，不把 snake/kebab 拆开。
 fn ascii_tokens(text: &str) -> Vec<(String, Option<char>)> {
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
@@ -414,11 +485,21 @@ fn ascii_tokens(text: &str) -> Vec<(String, Option<char>)> {
         }
         let start = i;
         i += 1;
-        while i < chars.len() && chars[i].is_ascii_alphanumeric() {
-            i += 1;
+        while i < chars.len() {
+            if chars[i].is_ascii_alphanumeric() {
+                i += 1;
+                continue;
+            }
+            if is_ident_joiner(chars[i])
+                && chars.get(i + 1).is_some_and(|c| c.is_ascii_alphanumeric())
+            {
+                i += 1;
+                continue;
+            }
+            break;
         }
         let word: String = chars[start..i].iter().collect();
-        let sep = chars.get(i).copied().filter(|c| is_connector(*c));
+        let sep = chars.get(i).copied().filter(|c| *c == ' ');
         out.push((word, sep));
     }
     out
@@ -434,18 +515,32 @@ fn push_unique(out: &mut Vec<String>, seen: &mut HashSet<String>, w: &str) -> bo
     out.len() >= MAX_EXTRACT
 }
 
-/// ASCII 词边界，CJK 紧贴可抽出；满 8 个唯一非停用词早停。
+/// ASCII 词边界，CJK 紧贴可抽出；标识符整段优先；短选区整段当第一词；满 8 个早停。
 pub fn extract_terms(text: &str) -> Vec<String> {
-    let tokens = ascii_tokens(text);
     let mut seen = HashSet::new();
     let mut out: Vec<String> = Vec::new();
+    if let Some(phrase) = short_term_selection(text) {
+        if push_unique(&mut out, &mut seen, &phrase) {
+            return out;
+        }
+    }
+    let tokens = ascii_tokens(text);
     for i in 0..tokens.len() {
-        if push_unique(&mut out, &mut seen, &tokens[i].0) {
+        let word = &tokens[i].0;
+        if push_unique(&mut out, &mut seen, word) {
             break;
         }
-        if let (Some(sep), Some((next, _))) = (tokens[i].1, tokens.get(i + 1)) {
-            if is_connector(sep) && !is_stopword(&tokens[i].0) && !is_stopword(next) {
-                let bigram = format!("{}{}{}", tokens[i].0, sep, next);
+        for part in ident_parts(word) {
+            if part.eq_ignore_ascii_case(word) {
+                continue;
+            }
+            if push_unique(&mut out, &mut seen, &part) {
+                return out;
+            }
+        }
+        if let (Some(' '), Some((next, _))) = (tokens[i].1, tokens.get(i + 1)) {
+            if !is_stopword(word) && !is_stopword(next) {
+                let bigram = format!("{word} {next}");
                 if push_unique(&mut out, &mut seen, &bigram) {
                     break;
                 }

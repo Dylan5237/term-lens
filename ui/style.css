@@ -19,10 +19,13 @@ html,body { background:transparent; overflow:hidden; font-family:"Microsoft YaHe
 #note { font-size:12px; color:var(--muted); line-height:1.5; max-height:40px; overflow:hidden; }
 #hint { font-size:11px; color:var(--muted); line-height:1.45; margin-top:4px; }
 #hint.off { display:none; }
-#cands { margin-top:4px; }
-.cand { display:inline-block; font-size:12px; margin:2px 4px 2px 0; padding:2px 8px;
-        border:1px solid var(--border); border-radius:8px; cursor:pointer; }
-.cand:hover { border-color:var(--accent); color:var(--accent); }
+#cands { margin-top:6px; display:flex; flex-direction:column; gap:8px; max-height:148px; overflow-y:auto; }
+.sense { padding:4px 0 6px; border-bottom:1px solid var(--border); }
+.sense:last-child { border-bottom:none; padding-bottom:0; }
+.sense.preferred { padding-left:8px; border-left:2px solid var(--accent); }
+.sense-zh { font-size:15px; font-weight:500; }
+.sense-meta { font-size:11px; color:var(--muted); margin-top:1px; }
+.sense-note { font-size:12px; color:var(--muted); line-height:1.45; margin-top:2px; }
 #acts { display:none; gap:6px; margin-top:8px; align-items:center; }
 button { font-size:12px; padding:3px 10px; border:1px solid var(--border); border-radius:6px;
          background:#f7f7f8; color:var(--fg); cursor:pointer; }

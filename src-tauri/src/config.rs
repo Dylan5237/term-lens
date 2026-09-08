@@ -488,7 +488,7 @@ fn windows_cred_read(target: &str) -> Option<String> {
 
 fn decode_cred_blob(bytes: &[u8]) -> Option<String> {
     let utf16_le_ascii = bytes.len() >= 2
-        && bytes.len() % 2 == 0
+        && bytes.len().is_multiple_of(2)
         && bytes.chunks_exact(2).all(|c| c[1] == 0);
     if utf16_le_ascii {
         let u16s: Vec<u16> = bytes

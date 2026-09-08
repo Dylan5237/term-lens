@@ -1,46 +1,24 @@
-//! 剪贴板取词状态机：未变化则禁止查询。
+//! 取词：非空选区即查询。禁止把未变化的剪贴板当选区。
 
 pub const MAX_SELECTION_BYTES: usize = 16 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GrabDecision {
-    Unchanged,
-    Changed(String),
-}
-
-impl GrabDecision {
-    pub fn should_lookup(&self) -> bool {
-        matches!(self, GrabDecision::Changed(_))
-    }
-
-    pub fn text(&self) -> Option<&str> {
-        match self {
-            GrabDecision::Changed(s) => Some(s),
-            GrabDecision::Unchanged => None,
-        }
+/// 修剪并截断；空串视为没有选区。同一词再划一次仍可查询。
+pub fn accept_selection_text(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(cap_text(t))
     }
 }
 
-/// 仅当 current 相对 snapshot 发生变化时返回新文本。
-pub fn selection_if_changed(snapshot: Option<&str>, current: Option<&str>) -> Option<String> {
+/// 探针写入后：剪贴板仍是探针 → 复制未发生；变成别的非空文本 → 才是选区。
+pub fn clipboard_after_probe(sentinel: &str, current: Option<&str>) -> Option<String> {
     let cur = current?;
-    match snapshot {
-        Some(old) if old == cur => None,
-        Some(_) => Some(cur.to_string()),
-        None => {
-            if cur.is_empty() {
-                None
-            } else {
-                Some(cur.to_string())
-            }
-        }
-    }
-}
-
-pub fn decide_grab(snapshot: Option<&str>, current: Option<&str>) -> GrabDecision {
-    match selection_if_changed(snapshot, current) {
-        Some(s) => GrabDecision::Changed(cap_text(&s)),
-        None => GrabDecision::Unchanged,
+    if cur == sentinel {
+        None
+    } else {
+        accept_selection_text(cur)
     }
 }
 
