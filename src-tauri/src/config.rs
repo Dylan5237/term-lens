@@ -487,13 +487,12 @@ fn windows_cred_read(target: &str) -> Option<String> {
 }
 
 fn decode_cred_blob(bytes: &[u8]) -> Option<String> {
-    let utf16_le_ascii = bytes.len() >= 2
-        && bytes.len().is_multiple_of(2)
-        && bytes.chunks_exact(2).all(|c| c[1] == 0);
+    let (pairs, rest) = bytes.as_chunks::<2>();
+    let utf16_le_ascii = rest.is_empty() && !pairs.is_empty() && pairs.iter().all(|c| c[1] == 0);
     if utf16_le_ascii {
-        let u16s: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        let u16s: Vec<u16> = pairs
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .take_while(|u| *u != 0)
             .collect();
         if let Ok(s) = String::from_utf16(&u16s) {
