@@ -18,11 +18,11 @@
 - **H2 资产中立**：禁止锁定私有格式。SQLite 为准，0.1.2 可 `export` 为 CSV。微软 TBX / L3：**未实施**。
 - **云端结果必经 pending 确认**才可转 active 写入词表（防 LLM 幻觉污染）。
 - **密钥只走 Windows 凭据管理器**（或环境变量 `TERM_LENS_API_KEY`），禁止把 api_key 当作 config.toml 的正路。启动时可一次性从 toml 迁出后删除文件中的 key。
-- **剪贴板未变禁止查询**：模拟复制后若剪贴板相对快照没有变化，中止，不 lookup、不 fallback、不写 query_log。
+- **取词优先不碰剪贴板**：UI Automation / 原生 Edit 读当前选区。Electron/Cursor 等读不到时，才短暂 Ctrl+C：先写入探针、复制后立刻还原用户剪贴板；非文本剪贴板（截图/文件）不走回退。禁止把「剪贴板未变化」当选区。读不到则中止，不 lookup、不上云、不写 query_log。同一词再划一次仍应查询。
 
 ## 产品冻结（0.1.2）
 
-这是 **Windows 托盘划词注释器**，不是终端透镜。不支持终端取词。取词靠模拟复制。默认无云端。
+这是 **Windows 托盘划词注释器**，不是终端透镜。不支持终端取词。取词优先 UIA，失败才探针式 Ctrl+C 并立刻还原剪贴板。默认无云端。
 
 明确不做：浏览器扩展、ConPTY、内存 LRU、前端虚拟化、微软 TBX、agents 多格式导出、Linux/macOS、流式跟翻、整篇翻译、覆盖旧 tag。
 
@@ -37,4 +37,4 @@
 - 验收看 DESIGN.md §9 指标表；p95 必须是真正 95 分位。达不到门槛先查数据模型，别先堆功能。
 - 术语裁决默认规范（L1 未覆盖时）：Agent→智能体（禁用"代理"）、Tool Use→工具使用、token 在 LLM 语境锁定「词元」。
 - Git：提交信息 conventional commits；`src-tauri/target/` 不入库；DESIGN.md 与 AGENTS.md 是权威源，改行为先改文档。
-- 版本号：Cargo.toml、tauri.conf.json、README 安装说明统一 **0.1.2**。
+- 版本号：Cargo.toml、tauri.conf.json、README 安装说明统一 **0.1.3**。

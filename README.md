@@ -2,7 +2,7 @@
 
 **Windows 托盘划词注释器**（不是终端透镜）。vibe coding 时 AI 爱冒英文术语？划选文本，双击 `Ctrl`，鼠标旁立刻弹出人话注释。
 
-> **产品冻结**：不支持终端取词。取词靠模拟复制；剪贴板相对快照没变就失败，绝不拿旧内容去查、更不上云。默认无云端；没配好 loopback / https 白名单就不发外网。密钥走 Windows 凭据管理器，不要写进 `config.toml`。
+> **产品冻结**：不支持终端取词。取词优先读系统选区（不经过剪贴板）。部分应用（如 Cursor）读不到时会短暂复制并立刻还原你的剪贴板。读不到选区才失败。默认无云端；没配好 loopback / https 白名单就不发外网。密钥走 Windows 凭据管理器，不要写进 `config.toml`。
 
 ```
 "独立 smoke 的 Runtime 链路已走到预期受控失败"
@@ -25,7 +25,7 @@
 
 - **两级流水线**：本地 SQLite 术语表（<200ms，内置 AI/IT 通行译法）→ 未命中且已配置合法 endpoint 才走云端兜底（默认 3s）
 - **裁决闭环**：✅采纳 / ✏️修改 / ❌否决。云端结果先落「待确认」，你确认后才转正。否决只伤个人层，种子「词元」还在
-- **一词多译**：token 在 LLM 语境锁定「词元」、安全语境→令牌；分不出域则并列候选，绝不瞎猜
+- **一词多译**：token 在 LLM 语境锁定「词元」、安全语境→令牌；分不出域则平铺全部释义，绝不瞎猜、不点选切换
 - **隐私优先**：默认不上云。开启后兜底**只上传术语单词本身**。密钥不进 toml
 - **系统托盘**：右键菜单分组：词库 / 提示词 / 大模型连接 / 界面与热键
 - **可配置**：`%APPDATA%\term-lens\config.toml` 改模型/超时/热键，`fallback_prompt.md` 改提示词，保存即生效
@@ -34,7 +34,7 @@
 
 前置：**Windows 10/11**、[MSVC 工具链](https://visualstudio.microsoft.com/visual-cpp-build-tools/)（安装「使用 C++ 的桌面开发」）、系统自带或引导安装 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) Runtime。
 
-1. Releases 下载 `TermLens_0.1.2_x64-setup.exe` 安装（免管理员权限，currentUser）
+1. Releases 下载 `TermLens_0.1.3_x64-setup.exe` 安装（免管理员权限，currentUser）
 2. 运行后进程常驻托盘——**默认就是安静的、不上云的**
 3. 在普通桌面窗口划选包含英文术语的文本，双击 `Ctrl`
 
@@ -51,7 +51,7 @@
 | 托盘图标 右键 | 词库统计/导出/导入、提示词、模型配置、弹窗位置与触发方式 |
 | `Esc` / 点别处 | 隐藏悬浮窗 |
 
-剪贴板没变时会提示失败，**不会查询、不会上云、不写 query_log**。
+读不到系统选区时会提示失败，**不会查询、不会上云、不写 query_log**。多数窗口不碰剪贴板；Cursor 等会短暂复制并立刻还原。同一词再划一次仍会查询。
 
 ## 配置云端兜底（可选）
 
@@ -101,7 +101,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release            # 绿色版 exe: target\release\term-lens.exe
 cd ..
 npx tauri build                  # NSIS 安装包
-# 产物: src-tauri\target\release\bundle\nsis\TermLens_0.1.2_x64-setup.exe
+# 产物: src-tauri\target\release\bundle\nsis\TermLens_0.1.3_x64-setup.exe
 ```
 
 `package.json` 脚本：`npm test`（cargo test）、`npm run dev`、`npm run build`。
