@@ -115,8 +115,8 @@ fn grab_selection_and_show(app: &AppHandle) {
         *st.last_selection.lock().unwrap() = selected.clone();
     }
 
-    let terms = extract_terms(&selected);
-    show_overlay(app, &terms);
+    let (terms, omitted) = extract_report(&selected);
+    show_overlay(app, &terms, omitted);
 }
 
 fn emit_selection_failed(app: &AppHandle, msg: &str) {
@@ -134,16 +134,25 @@ fn emit_selection_failed(app: &AppHandle, msg: &str) {
     });
 }
 
-fn show_overlay(app: &AppHandle, terms: &[String]) {
+#[derive(Serialize)]
+struct TermsPayload {
+    terms: Vec<String>,
+    omitted: usize,
+}
+
+fn show_overlay(app: &AppHandle, terms: &[String], omitted: usize) {
     let app2 = app.clone();
     let (px, py) = get_cursor_pos();
     let fixed = load_config().ui.position == "fixed";
     let win: Option<WebviewWindow> = app2.get_webview_window("main");
-    let terms = terms.to_vec();
+    let payload = TermsPayload {
+        terms: terms.to_vec(),
+        omitted,
+    };
     tauri::async_runtime::spawn(async move {
         if let Some(w) = win {
             position_window(&w, px, py, fixed);
-            let _ = w.emit("terms-requested", &terms);
+            let _ = w.emit("terms-requested", &payload);
             let _ = w.show();
             let _ = w.set_focus();
         }
@@ -205,6 +214,25 @@ fn cursor_work_area(w: &WebviewWindow, px: f64, py: f64, scale: f64) -> (f64, f6
         .unwrap_or((0.0, 0.0, 1920.0 * scale, 1080.0 * scale))
 }
 
+fn pin_overlay_pos(
+    x: f64,
+    y: f64,
+    pw: f64,
+    ph: f64,
+    wx: f64,
+    wy: f64,
+    ww: f64,
+    wh: f64,
+    scale: f64,
+) -> (f64, f64) {
+    let pad = 12.0 * scale;
+    let min_x = wx + pad;
+    let min_y = wy + pad;
+    let max_x = (wx + ww - pw - pad).max(min_x);
+    let max_y = (wy + wh - ph - pad).max(min_y);
+    (x.max(min_x).min(max_x), y.max(min_y).min(max_y))
+}
+
 fn clamp_overlay_pos(
     px: f64,
     py: f64,
@@ -233,10 +261,7 @@ fn clamp_overlay_pos(
     let min_y = wy + pad;
     let max_x = (wx + ww - pw - pad).max(min_x);
     let max_y = (wy + wh - ph - pad).max(min_y);
-    (
-        fx.max(min_x).min(max_x),
-        fy.max(min_y).min(max_y),
-    )
+    (fx.max(min_x).min(max_x), fy.max(min_y).min(max_y))
 }
 
 fn position_window(w: &WebviewWindow, px: f64, py: f64, fixed: bool) {
@@ -248,16 +273,18 @@ fn position_window(w: &WebviewWindow, px: f64, py: f64, fixed: bool) {
     let (wx, wy, ww, wh) = cursor_work_area(w, px, py, scale);
     let max_ph = (wh * POPUP_WORK_FRAC).min(POPUP_MAX_LOGICAL_H * scale);
     let ph = ph.min(max_ph).max(POPUP_MIN_LOGICAL_H * scale);
-    let _ = w.set_size(tauri::LogicalSize::new(
-        pw / scale,
-        ph / scale,
-    ));
+    let _ = w.set_size(tauri::LogicalSize::new(pw / scale, ph / scale));
     let (fx, fy) = clamp_overlay_pos(px, py, pw, ph, wx, wy, ww, wh, scale, fixed);
     let _ = w.set_position(tauri::PhysicalPosition::new(fx, fy));
 }
 
 #[tauri::command]
-fn place_overlay(app: tauri::AppHandle, width: f64, height: f64) -> Result<f64, String> {
+fn place_overlay(
+    app: tauri::AppHandle,
+    width: f64,
+    height: f64,
+    reanchor: bool,
+) -> Result<f64, String> {
     let w = app
         .get_webview_window("main")
         .ok_or_else(|| "no overlay window".to_string())?;
@@ -273,7 +300,13 @@ fn place_overlay(app: tauri::AppHandle, width: f64, height: f64) -> Result<f64, 
     let fixed = load_config().ui.position == "fixed";
     w.set_size(tauri::LogicalSize::new(width, h))
         .map_err(|e| e.to_string())?;
-    let (fx, fy) = clamp_overlay_pos(px, py, pw, ph, wx, wy, ww, wh, scale, fixed);
+    let (fx, fy) = if reanchor {
+        clamp_overlay_pos(px, py, pw, ph, wx, wy, ww, wh, scale, fixed)
+    } else if let Ok(pos) = w.outer_position() {
+        pin_overlay_pos(pos.x as f64, pos.y as f64, pw, ph, wx, wy, ww, wh, scale)
+    } else {
+        clamp_overlay_pos(px, py, pw, ph, wx, wy, ww, wh, scale, fixed)
+    };
     w.set_position(tauri::PhysicalPosition::new(fx, fy))
         .map_err(|e| e.to_string())?;
     Ok(h)
@@ -402,6 +435,41 @@ fn lookup(state: State<AppState>, en: String) -> Result<LookupResult, String> {
         let _ = log_query(&conn, &en, "miss", latency);
     }
     Ok(LookupResult { hit, candidates })
+}
+
+#[derive(Serialize)]
+struct LookupItem {
+    en: String,
+    hit: Option<Term>,
+    candidates: Vec<Term>,
+}
+
+#[tauri::command]
+fn lookup_many(state: State<AppState>, ens: Vec<String>) -> Result<Vec<LookupItem>, String> {
+    let ctx = state
+        .last_selection
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(ens.len().min(MAX_EXTRACT));
+    for en in ens.into_iter().take(MAX_EXTRACT) {
+        let t0 = std::time::Instant::now();
+        let (hit, candidates) = lookup_terms(&conn, &en, &ctx).map_err(|e| e.to_string())?;
+        let latency = t0.elapsed().as_millis() as i64;
+        if let Some(h) = &hit {
+            let _ = bump_hit_count(&conn, &h.en);
+            let _ = log_query(&conn, &h.en, &h.layer, latency);
+        } else {
+            let _ = log_query(&conn, &en, "miss", latency);
+        }
+        out.push(LookupItem {
+            en,
+            hit,
+            candidates,
+        });
+    }
+    Ok(out)
 }
 
 #[derive(Serialize)]
@@ -928,7 +996,7 @@ fn tray_menu_event(app: &AppHandle, id: &str) {
             tauri::async_runtime::spawn(async move {
                 let cfg = load_config();
                 if let Err(e) = cloud_preflight(&cfg.provider.base_url) {
-                    err_box("连接测试", &format!("{e}\n\n默认不上云。请在 config.toml 填写允许的 base_url（https 或 loopback http）。密钥走凭据管理器。"));
+                    err_box("连接测试", &format!("{e}\n\n默认不上云。请在 config.toml 填写允许的 base_url（https、loopback http 或内网 RFC1918 http）。密钥走凭据管理器。"));
                     return;
                 }
                 let url = format!(
@@ -1199,6 +1267,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             lookup,
+            lookup_many,
             fallback,
             adopt,
             fix,

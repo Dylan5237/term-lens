@@ -86,6 +86,18 @@ mod tests {
     }
 
     #[test]
+    fn extract_report_caps_and_counts_omitted() {
+        let words = (0..12)
+            .map(|i| format!("term{i:02}x"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let (terms, omitted) = extract_report(&words);
+        assert_eq!(terms.len(), MAX_EXTRACT);
+        assert_eq!(omitted, 4);
+        assert_eq!(extract_terms(&words), terms);
+    }
+
+    #[test]
     fn extract_skips_leading_stopword_the() {
         let terms = extract_terms("The Runtime is ready");
         assert!(!terms.is_empty(), "应抽出 Runtime");
@@ -280,9 +292,13 @@ mod tests {
         assert!(validate_base_url("ftp://127.0.0.1/v1").is_err());
         assert!(validate_base_url("http://127.0.0.1:10100/v1").is_ok());
         assert!(validate_base_url("http://localhost:10100/v1").is_ok());
+        assert!(validate_base_url("http://192.168.3.77:13000/v1").is_ok());
+        assert!(validate_base_url("http://10.1.2.3/v1").is_ok());
         assert!(validate_base_url("https://api.deepseek.com/v1").is_ok());
         assert!(should_send_cloud_request("http://127.0.0.1:10100/v1"));
+        assert!(should_send_cloud_request("http://192.168.3.77:13000/v1"));
         assert!(!should_send_cloud_request("http://evil.example/v1"));
+        assert!(!should_send_cloud_request("http://8.8.8.8/v1"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "term-lens"
-version = "0.1.4"
+version = "0.1.5"
 description = "Windows 托盘划词注释器 (不是终端透镜)"
 edition = "2021"
 

@@ -16,7 +16,13 @@
   <div id="zh">Windows 托盘划词注释器</div>
   <div id="note">划选后双击 Ctrl（或 Alt+T）。优先读系统选区；读不到时短暂复制并立刻还原剪贴板。同一词可重复查询。</div>
   <div id="hint">不支持终端取词。默认无云端；没配好 loopback / https 白名单就不发外网。密钥走凭据管理器，不要写进 toml。</div>
+  <div id="listHead" class="off">
+    <span id="listUnknown"></span>
+    <span id="listKnown"></span>
+    <span id="listMore"></span>
+  </div>
   <div id="loading"></div>
+  <div id="termList"></div>
   <div id="cands"></div>
   <div id="fix">
     <textarea id="fixInput" rows="2" placeholder="输入正确译法（可多行）"></textarea>

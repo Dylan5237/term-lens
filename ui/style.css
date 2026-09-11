@@ -11,6 +11,7 @@ html,body { height:100%; background:transparent; overflow:hidden; font-family:"M
   display:flex; flex-direction:column; max-height:calc(100% - 12px); overflow:hidden;
 }
 #head { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+#head.off { display:none; }
 #term { font-size:14px; font-weight:500; color:var(--accent); font-family:Consolas,monospace; }
 .chip { font-size:11px; padding:1px 6px; border-radius:8px; color:var(--muted); }
 .chip.ai{background:var(--chip-ai);} .chip.ms{background:var(--chip-ms);}
@@ -21,19 +22,61 @@ html,body { height:100%; background:transparent; overflow:hidden; font-family:"M
 #note.scroll { overflow-y:auto; }
 #hint { font-size:11px; color:var(--muted); line-height:1.45; margin-top:4px; }
 #hint.off { display:none; }
+#listHead { display:flex; align-items:baseline; flex-wrap:wrap; gap:6px 10px; margin-bottom:6px; padding-bottom:8px; border-bottom:1px solid var(--border); font-size:13px; }
+#listHead.off { display:none; }
+#listUnknown { font-weight:600; color:var(--accent); }
+#listKnown, #listMore { font-size:12px; color:var(--muted); }
+#listHead #offline { margin-left:auto; }
+#termList { display:none; flex-direction:column; min-height:0; overflow:hidden; }
+#termList.on { display:flex; }
+#termList.scroll { overflow-y:auto; }
+.term-row { padding:2px 0 4px; border-bottom:1px solid var(--border); }
+.term-row:last-child { border-bottom:none; }
+.term-row.open {
+  background:#f7f6fb;
+  margin:4px -8px 6px;
+  padding:4px 8px 8px;
+  border-radius:10px;
+  border-bottom:none;
+}
+.term-toggle {
+  display:flex; align-items:baseline; gap:8px; width:100%; min-width:0;
+  text-align:left; background:none; border:0; padding:6px 2px; cursor:pointer;
+  font:inherit; color:inherit;
+}
+.term-en { font-family:Consolas,monospace; font-size:13px; font-weight:650; color:var(--accent); flex:0 1 auto; }
+.term-zh { font-size:13px; color:var(--fg); flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.term-row.known .term-en { color:#6b6578; font-weight:600; }
+.term-detail { padding:0 2px 2px; }
+.term-detail.off { display:none; }
+.sense-well {
+  background:#fff; border:1px solid var(--border); border-radius:8px;
+  padding:8px 10px; margin-bottom:8px;
+}
+.sense { padding:6px 0; }
+.sense + .sense { border-top:1px solid var(--border); }
+.sense.preferred { border-left:2px solid var(--accent); padding-left:8px; margin-left:-2px; }
+.sense-zh { font-size:14px; font-weight:650; color:var(--fg); }
+.sense-meta { font-size:11px; color:var(--muted); margin-top:2px; }
+.sense-note { font-size:12px; color:#4a4458; line-height:1.45; margin-top:4px; overflow-wrap:anywhere; white-space:pre-wrap; }
+.term-error { font-size:12px; color:#8a3b3b; margin:4px 0 8px; }
+.term-detail #acts { margin-top:2px; }
 #cands { margin-top:6px; display:flex; flex-direction:column; gap:8px; min-height:0; overflow:hidden; }
 #cands.scroll { overflow-y:auto; }
-.sense { padding:4px 0 6px; border-bottom:1px solid var(--border); }
-.sense:last-child { border-bottom:none; padding-bottom:0; }
-.sense.preferred { padding-left:8px; border-left:2px solid var(--accent); }
-.sense-zh { font-size:15px; font-weight:500; }
-.sense-meta { font-size:11px; color:var(--muted); margin-top:1px; }
-.sense-note { font-size:12px; color:var(--muted); line-height:1.45; margin-top:2px; overflow-wrap:anywhere; white-space:pre-wrap; }
+#cands .sense { padding:4px 0 6px; border-bottom:1px solid var(--border); }
+#cands .sense:last-child { border-bottom:none; padding-bottom:0; }
+#cands .sense.preferred { padding-left:8px; border-left:2px solid var(--accent); margin-left:0; }
+#cands .sense-zh { font-size:15px; font-weight:500; }
+#cands .sense-note { color:var(--muted); margin-top:2px; }
 #acts { display:none; gap:6px; margin-top:8px; align-items:center; flex-shrink:0; }
 button { font-size:12px; padding:3px 10px; border:1px solid var(--border); border-radius:6px;
          background:#f7f7f8; color:var(--fg); cursor:pointer; }
 button:hover { border-color:var(--accent); }
 button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+.term-toggle, .term-toggle:hover {
+  padding:6px 2px; border:0; background:none; border-radius:0;
+}
+.term-toggle .chip { flex:0 0 auto; }
 #fix { display:none; flex-direction:column; gap:6px; margin-top:6px; }
 #fix.on { display:flex; }
 #fixInput { width:100%; min-height:54px; max-height:120px; font-size:12px; padding:5px 7px; border:1px solid var(--accent); border-radius:6px; resize:vertical; font-family:inherit; line-height:1.4; outline:none; background:#fff; color:var(--fg); box-sizing:border-box; }

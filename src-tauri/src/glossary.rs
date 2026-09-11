@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 pub const SCHEMA_VERSION: i64 = 1;
 pub const MAX_EXTRACT: usize = 8;
+const EXTRACT_SCAN: usize = 32;
 pub const MAX_TERM_CHARS: usize = 64;
 pub const MAX_SHORT_TERM_SEGMENTS: usize = 4;
 pub const SEED_CLASSIC: &str = include_str!("../../data/seed_terms.csv");
@@ -505,49 +506,61 @@ fn ascii_tokens(text: &str) -> Vec<(String, Option<char>)> {
     out
 }
 
-fn push_unique(out: &mut Vec<String>, seen: &mut HashSet<String>, w: &str) -> bool {
+fn push_unique(out: &mut Vec<String>, seen: &mut HashSet<String>, w: &str, max: usize) -> bool {
     let lw = w.to_lowercase();
     if lw.len() < 2 || is_stopword(&lw) || seen.contains(&lw) {
-        return out.len() >= MAX_EXTRACT;
+        return out.len() >= max;
     }
     seen.insert(lw);
     out.push(w.to_string());
-    out.len() >= MAX_EXTRACT
+    out.len() >= max
 }
 
-/// ASCII 词边界，CJK 紧贴可抽出；标识符整段优先；短选区整段当第一词；满 8 个早停。
-pub fn extract_terms(text: &str) -> Vec<String> {
+fn extract_capped(text: &str, max: usize) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out: Vec<String> = Vec::new();
     if let Some(phrase) = short_term_selection(text) {
-        if push_unique(&mut out, &mut seen, &phrase) {
+        if push_unique(&mut out, &mut seen, &phrase, max) {
             return out;
         }
     }
     let tokens = ascii_tokens(text);
     for i in 0..tokens.len() {
         let word = &tokens[i].0;
-        if push_unique(&mut out, &mut seen, word) {
+        if push_unique(&mut out, &mut seen, word, max) {
             break;
         }
         for part in ident_parts(word) {
             if part.eq_ignore_ascii_case(word) {
                 continue;
             }
-            if push_unique(&mut out, &mut seen, &part) {
+            if push_unique(&mut out, &mut seen, &part, max) {
                 return out;
             }
         }
         if let (Some(' '), Some((next, _))) = (tokens[i].1, tokens.get(i + 1)) {
             if !is_stopword(word) && !is_stopword(next) {
                 let bigram = format!("{word} {next}");
-                if push_unique(&mut out, &mut seen, &bigram) {
+                if push_unique(&mut out, &mut seen, &bigram, max) {
                     break;
                 }
             }
         }
     }
     out
+}
+
+/// ASCII 词边界，CJK 紧贴可抽出；标识符整段优先；短选区整段当第一词；满 8 个早停。
+pub fn extract_terms(text: &str) -> Vec<String> {
+    extract_capped(text, MAX_EXTRACT)
+}
+
+/// 展示上限 8；`omitted` 是继续扫到 32 个唯一词后多出来的数量。
+pub fn extract_report(text: &str) -> (Vec<String>, usize) {
+    let mut scanned = extract_capped(text, EXTRACT_SCAN);
+    let omitted = scanned.len().saturating_sub(MAX_EXTRACT);
+    scanned.truncate(MAX_EXTRACT);
+    (scanned, omitted)
 }
 
 /// 只剥一层复数 s；`class` 因以 ss 结尾保持不变，禁止 trim_end_matches 全剥。

@@ -34,7 +34,7 @@
 
 前置：**Windows 10/11**、[MSVC 工具链](https://visualstudio.microsoft.com/visual-cpp-build-tools/)（安装「使用 C++ 的桌面开发」）、系统自带或引导安装 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) Runtime。
 
-1. Releases 下载 `TermLens_0.1.4_x64-setup.exe` 安装（免管理员权限，currentUser）
+1. Releases 下载 `TermLens_0.1.5_x64-setup.exe` 安装（免管理员权限，currentUser）
 2. 运行后进程常驻托盘——**默认就是安静的、不上云的**
 3. 在普通桌面窗口划选包含英文术语的文本，双击 `Ctrl`
 
@@ -45,7 +45,7 @@
 | 操作 | 说明 |
 |------|------|
 | 双击 `Ctrl` | 划选取词（默认；托盘或 `config.toml` 可切 `Alt+T`） |
-| 点击英文词 | 划选含多个术语时循环切换 |
+| 点开列表中的一行 | 划选抽出 ≥2 个术语时看该词释义并裁决；1 个术语仍是单卡 |
 | 采纳 / 修改 / 否决 | 裁决写入个人层；否决不改官方种子 |
 | 托盘图标 左键 | 显示悬浮窗 |
 | 托盘图标 右键 | 词库统计/导出/导入、提示词、模型配置、弹窗位置与触发方式 |
@@ -67,9 +67,9 @@ model    = "deepseek-v4-flash"
 timeout_ms = 3000
 ```
 
-本地代理也可以：`base_url = "http://127.0.0.1:10100/v1"`。loopback 明文 http 允许；其它公网必须 https。
+本地代理或内网网关也可以：`base_url = "http://127.0.0.1:10100/v1"` 或 `base_url = "http://192.168.3.77:13000/v1"`。明文 http 仅允许 loopback 与 RFC1918 字面量 IP；公网必须 https。
 
-不允许的 URL（任意主机的 http、非 http(s) 等）会直接失败且不发请求。loopback 绕过系统代理；外网走系统代理。
+不允许的 URL（公网 http、非 http(s) 等）会直接失败且不发请求。loopback / 内网 IP 绕过系统代理；外网走系统代理。
 
 「恢复默认配置」写入的内容与仓库 `src-tauri/src/default_config.toml` 一致：`base_url = ""`、`timeout_ms = 3000`。
 

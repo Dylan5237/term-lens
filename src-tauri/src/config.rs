@@ -105,7 +105,33 @@ pub fn is_loopback_host(host: &str) -> bool {
     )
 }
 
-/// 默认只允许 https；明文 http 仅 loopback host；拒绝非 http(s)。
+/// RFC1918 字面量 IPv4（10/8、172.16/12、192.168/16）。主机名不算。
+pub fn is_private_ipv4_host(host: &str) -> bool {
+    let h = host.trim().trim_matches(|c| c == '[' || c == ']');
+    h.parse::<std::net::Ipv4Addr>()
+        .map(|ip| ip.is_private())
+        .unwrap_or(false)
+}
+
+pub fn url_host(base_url: &str) -> String {
+    let s = base_url.trim();
+    let rest = strip_scheme(s, "https://")
+        .or_else(|| strip_scheme(s, "http://"))
+        .unwrap_or("");
+    let hostport = rest.split('/').next().unwrap_or("");
+    if hostport.starts_with('[') {
+        hostport
+            .split(']')
+            .next()
+            .unwrap_or("")
+            .trim_start_matches('[')
+            .to_string()
+    } else {
+        hostport.split(':').next().unwrap_or("").to_string()
+    }
+}
+
+/// 默认只允许 https；明文 http 仅 loopback 或 RFC1918 字面量 IP；拒绝非 http(s)。
 pub fn validate_base_url(raw: &str) -> Result<(), String> {
     let s = raw.trim();
     if s.is_empty() {
@@ -140,8 +166,8 @@ pub fn validate_base_url(raw: &str) -> Result<(), String> {
     if host.is_empty() || host == "*" || host == "0.0.0.0" {
         return Err("拒绝任意 URL".into());
     }
-    if scheme == "http" && !is_loopback_host(host) {
-        return Err("明文 http 仅允许 loopback host".into());
+    if scheme == "http" && !is_loopback_host(host) && !is_private_ipv4_host(host) {
+        return Err("明文 http 仅允许 loopback 或内网 IPv4（RFC1918）".into());
     }
     Ok(())
 }
@@ -159,26 +185,17 @@ pub fn should_send_cloud_request(base_url: &str) -> bool {
 }
 
 pub fn url_is_loopback(base_url: &str) -> bool {
-    let s = base_url.trim();
-    let rest = strip_scheme(s, "https://")
-        .or_else(|| strip_scheme(s, "http://"))
-        .unwrap_or("");
-    let hostport = rest.split('/').next().unwrap_or("");
-    let host = if hostport.starts_with('[') {
-        hostport
-            .split(']')
-            .next()
-            .unwrap_or("")
-            .trim_start_matches('[')
-    } else {
-        hostport.split(':').next().unwrap_or("")
-    };
-    is_loopback_host(host)
+    is_loopback_host(&url_host(base_url))
+}
+
+pub fn url_skips_proxy(base_url: &str) -> bool {
+    let host = url_host(base_url);
+    is_loopback_host(&host) || is_private_ipv4_host(&host)
 }
 
 pub fn http_client_for(base_url: &str) -> Result<reqwest::Client, String> {
     let mut b = reqwest::Client::builder();
-    if url_is_loopback(base_url) {
+    if url_skips_proxy(base_url) {
         b = b.no_proxy();
     }
     b.build().map_err(|e| format!("构建 HTTP 客户端失败: {e}"))

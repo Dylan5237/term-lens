@@ -12,6 +12,7 @@ const POPUP_EDGE = 12;
 let current = null;
 let seqId = 0;
 let fitTimer = 0;
+let overlayNeedsAnchor = true;
 
 function $(id) { return document.getElementById(id); }
 
@@ -21,6 +22,8 @@ function fitWindow() {
 }
 
 function definitionBlock() {
+  const list = $('termList');
+  if (list && list.classList.contains('on')) return list;
   const note = $('note');
   const cands = $('cands');
   if (note && note.style.display !== 'none' && note.textContent) return note;
@@ -28,8 +31,71 @@ function definitionBlock() {
   return null;
 }
 
+function restoreChromeToCard() {
+  const card = $('card');
+  const fix = $('fix');
+  const acts = $('acts');
+  if (card && fix && fix.parentElement !== card) card.appendChild(fix);
+  if (card && acts && acts.parentElement !== card) card.appendChild(acts);
+}
+
+function leaveListChrome() {
+  restoreChromeToCard();
+  const head = $('head');
+  const offline = $('offline');
+  if (head) head.classList.remove('off');
+  if (head && offline && offline.parentElement !== head) head.appendChild(offline);
+}
+
+function enterListChrome() {
+  $('head').classList.add('off');
+  const listHead = $('listHead');
+  const offline = $('offline');
+  if (listHead && offline && offline.parentElement !== listHead) listHead.appendChild(offline);
+}
+
+function hideTermList() {
+  restoreChromeToCard();
+  const list = $('termList');
+  if (list) {
+    list.classList.remove('on', 'scroll');
+    list.innerHTML = '';
+  }
+  const head = $('listHead');
+  if (head) head.classList.add('off');
+  leaveListChrome();
+}
+
+function showListHead(unknown, known, omitted) {
+  const head = $('listHead');
+  if (!head) return;
+  head.classList.remove('off');
+  $('listUnknown').textContent = unknown + ' 个未知';
+  $('listKnown').textContent = known + ' 个已知';
+  $('listMore').textContent = omitted > 0 ? '还有 ' + omitted + ' 个未列' : '';
+}
+
+function isUnknownItem(item) {
+  if (item.hit && item.hit.status === 'pending') return true;
+  if (item.candidates && item.candidates.length > 1 && !item.hit) return true;
+  return !item.hit;
+}
+
+function itemZh(item) {
+  if (item.hit) return item.hit.zh || '';
+  if (item.candidates && item.candidates.length > 1) return '多义';
+  if (item.cloudError) return item.cloudError;
+  return '未命中';
+}
+
+function itemDisplayed(item) {
+  if (item.hit) return item.hit;
+  if (item.candidates && item.candidates.length === 1) return item.candidates[0];
+  return item.hit || null;
+}
+
 function clearDefinitionScroll() {
-  ['note', 'cands'].forEach(id => {
+  ['note', 'cands', 'termList'].forEach(id => {
     const el = $(id);
     if (!el) return;
     el.classList.remove('scroll');
@@ -100,9 +166,11 @@ async function fitWindowNow() {
     Math.min(POPUP_MAX_HEIGHT, Math.floor((area.h / scale) * 2 / 3))
   );
   const height = Math.max(POPUP_MIN_HEIGHT, Math.min(natural + POPUP_SLACK, maxH));
+  const reanchor = overlayNeedsAnchor;
   let applied = height;
   try {
-    applied = await invoke('place_overlay', { width: POPUP_WIDTH, height });
+    applied = await invoke('place_overlay', { width: POPUP_WIDTH, height, reanchor });
+    overlayNeedsAnchor = false;
   } catch (_) {
     try {
       await win.setSize(new dpi.LogicalSize(POPUP_WIDTH, height));
@@ -115,18 +183,21 @@ async function fitWindowNow() {
         const pad = POPUP_EDGE * scale;
         let x = pos.x;
         let y = pos.y;
-        if (cursor && y + size.height > area.y + area.h - pad) {
-          const above = cursor.y - size.height - pad;
-          if (above >= area.y + pad) y = above;
-        }
-        if (cursor && x + size.width > area.x + area.w - pad) {
-          const left = cursor.x - size.width - pad;
-          if (left >= area.x + pad) x = left;
+        if (reanchor) {
+          if (cursor && y + size.height > area.y + area.h - pad) {
+            const above = cursor.y - size.height - pad;
+            if (above >= area.y + pad) y = above;
+          }
+          if (cursor && x + size.width > area.x + area.w - pad) {
+            const left = cursor.x - size.width - pad;
+            if (left >= area.x + pad) x = left;
+          }
         }
         const next = clampToWorkArea(x, y, size.width, size.height, area, pad);
         if (next.x !== pos.x || next.y !== pos.y) {
           await win.setPosition(new dpi.PhysicalPosition(next.x, next.y));
         }
+        overlayNeedsAnchor = false;
       } catch (_) { /* keep current position */ }
     }
   }
@@ -148,8 +219,10 @@ function hideHint() {
 }
 
 function showSinglePane() {
+  hideTermList();
   $('zh').style.display = '';
   $('note').style.display = '';
+  $('term').style.display = '';
 }
 
 function hideSinglePane() {
@@ -168,6 +241,12 @@ function layerLabel(t) {
 }
 
 function setHeadMeta(t) {
+  if (current && current.mode === 'list') {
+    $('layer').textContent = '';
+    $('layer').className = 'chip';
+    $('domain').textContent = '';
+    return;
+  }
   const chip = $('layer');
   if (!t) {
     chip.textContent = '多义';
@@ -178,6 +257,44 @@ function setHeadMeta(t) {
   chip.textContent = layerLabel(t);
   chip.className = 'chip ' + (t.status === 'pending' ? 'pending' : t.layer || '');
   $('domain').textContent = t.domain && t.domain !== 'general' ? '[' + t.domain + ']' : '';
+}
+
+function orderedSenses(item) {
+  const cands = (item && item.candidates && item.candidates.length)
+    ? item.candidates.slice()
+    : (item && item.hit ? [item.hit] : []);
+  if (!cands.length || !item.hit) return cands;
+  const pref = [];
+  const rest = [];
+  cands.forEach(c => (sameSense(c, item.hit) ? pref : rest).push(c));
+  return pref.concat(rest);
+}
+
+function appendSense(parent, c, preferred) {
+  const row = document.createElement('div');
+  row.className = 'sense' + (preferred ? ' preferred' : '');
+  const zh = document.createElement('div');
+  zh.className = 'sense-zh';
+  zh.textContent = c.zh || '';
+  row.appendChild(zh);
+  const bits = [];
+  if (c.domain && c.domain !== 'general') bits.push(c.domain);
+  const layer = layerLabel(c);
+  if (layer) bits.push(layer);
+  if (preferred) bits.push('当前语境');
+  if (bits.length) {
+    const meta = document.createElement('div');
+    meta.className = 'sense-meta';
+    meta.textContent = bits.join(' · ');
+    row.appendChild(meta);
+  }
+  if (c.note) {
+    const note = document.createElement('div');
+    note.className = 'sense-note';
+    note.textContent = c.note;
+    row.appendChild(note);
+  }
+  parent.appendChild(row);
 }
 
 function renderHit(t) {
@@ -203,42 +320,160 @@ function renderSenseList(cands, preferred) {
   setHeadMeta(preferred || null);
   const box = $('cands');
   box.innerHTML = '';
-  cands.forEach(c => {
-    const row = document.createElement('div');
-    const preferredRow = sameSense(c, preferred);
-    row.className = 'sense' + (preferredRow ? ' preferred' : '');
-    const zh = document.createElement('div');
-    zh.className = 'sense-zh';
-    zh.textContent = c.zh || '';
-    row.appendChild(zh);
-    const bits = [];
-    if (c.domain && c.domain !== 'general') bits.push(c.domain);
-    const layer = layerLabel(c);
-    if (layer) bits.push(layer);
-    if (preferredRow) bits.push('当前语境');
-    if (bits.length) {
-      const meta = document.createElement('div');
-      meta.className = 'sense-meta';
-      meta.textContent = bits.join(' · ');
-      row.appendChild(meta);
-    }
-    if (c.note) {
-      const note = document.createElement('div');
-      note.className = 'sense-note';
-      note.textContent = c.note;
-      row.appendChild(note);
-    }
-    box.appendChild(row);
-  });
+  cands.forEach(c => appendSense(box, c, sameSense(c, preferred)));
   $('loading').textContent = '';
   $('acts').style.display = 'flex';
   fitWindow();
 }
 
-async function showTerms(terms) {
+function sortUnknownFirst(rows) {
+  return rows.slice().sort((a, b) => Number(isUnknownItem(b)) - Number(isUnknownItem(a)));
+}
+
+function paintTermList() {
+  restoreChromeToCard();
+  const box = $('termList');
+  box.innerHTML = '';
+  box.classList.add('on');
+  enterListChrome();
+  hideSinglePane();
+  $('term').style.display = 'none';
+  $('cands').innerHTML = '';
+  const unknown = current.rows.filter(isUnknownItem).length;
+  showListHead(unknown, current.rows.length - unknown, current.omitted || 0);
+  current.rows.forEach((item, i) => {
+    const row = document.createElement('div');
+    const open = current.expanded === i;
+    row.className = 'term-row' + (isUnknownItem(item) ? '' : ' known') + (open ? ' open' : '');
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'term-toggle';
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const en = document.createElement('span');
+    en.className = 'term-en';
+    en.textContent = item.en;
+    const zh = document.createElement('span');
+    zh.className = 'term-zh';
+    zh.textContent = itemZh(item);
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    if (item.hit && item.hit.status === 'pending') {
+      chip.textContent = '待确认';
+      chip.className = 'chip pending';
+    } else if (item.candidates && item.candidates.length > 1 && !item.hit) {
+      chip.textContent = '多义';
+    } else if (item.hit) {
+      chip.textContent = '已知';
+      chip.className = 'chip ' + (item.hit.layer || '');
+    } else {
+      chip.textContent = item.loading ? '查询中' : '未知';
+    }
+    toggle.appendChild(en);
+    toggle.appendChild(zh);
+    toggle.appendChild(chip);
+    toggle.onclick = () => {
+      if (current.expanded === i) return;
+      resetFix();
+      current.expanded = i;
+      current.displayed = itemDisplayed(item);
+      paintTermList();
+      fitWindow();
+    };
+    row.appendChild(toggle);
+    const detail = document.createElement('div');
+    detail.className = 'term-detail' + (open ? '' : ' off');
+    if (open) {
+      const senses = orderedSenses(item);
+      if (senses.length) {
+        const well = document.createElement('div');
+        well.className = 'sense-well';
+        senses.forEach(c => appendSense(well, c, sameSense(c, item.hit)));
+        detail.appendChild(well);
+      } else {
+        const err = document.createElement('div');
+        err.className = 'term-error';
+        err.textContent = item.cloudError || (item.loading ? '查询中…' : '本地未命中');
+        detail.appendChild(err);
+      }
+      const acts = $('acts');
+      acts.style.display = current.displayed ? 'flex' : 'none';
+      detail.appendChild($('fix'));
+      detail.appendChild(acts);
+    }
+    row.appendChild(detail);
+    box.appendChild(row);
+  });
+  if (!current.rows.length) {
+    $('acts').style.display = 'none';
+  }
+}
+
+async function renderTermList(id) {
+  hideHint();
+  resetFix();
+  current.mode = 'list';
+  enterListChrome();
+  hideSinglePane();
+  $('term').style.display = 'none';
+  $('cands').innerHTML = '';
+  $('offline').style.display = 'none';
+  $('loading').textContent = '查询中…';
+  $('acts').style.display = 'none';
+  fitWindow();
+  let rows;
+  try {
+    rows = await invoke('lookup_many', { ens: current.terms });
+  } catch (e) {
+    if (id !== seqId) return;
+    $('loading').textContent = '本地查询失败: ' + e;
+    fitWindow();
+    return;
+  }
+  if (id !== seqId) return;
+  current.rows = sortUnknownFirst(rows);
+  current.mode = 'list';
+  const firstUnknown = current.rows.findIndex(isUnknownItem);
+  current.expanded = firstUnknown >= 0 ? firstUnknown : 0;
+  current.displayed = itemDisplayed(current.rows[current.expanded]);
+  setHeadMeta(current.displayed);
+  $('loading').textContent = '';
+  paintTermList();
+  fitWindow();
+
+  for (let i = 0; i < current.rows.length; i++) {
+    const item = current.rows[i];
+    if (item.hit || (item.candidates && item.candidates.length)) continue;
+    item.loading = true;
+    paintTermList();
+    try {
+      const cloud = await invoke('fallback', { en: item.en });
+      if (id !== seqId) return;
+      if (cloud.offline) $('offline').style.display = 'inline';
+      if (cloud.result) {
+        item.hit = cloud.result;
+        item.candidates = cloud.candidates && cloud.candidates.length ? cloud.candidates : [cloud.result];
+      } else {
+        item.cloudError = cloud.error || '无结果';
+      }
+    } catch (e) {
+      if (id !== seqId) return;
+      item.cloudError = '兜底失败';
+      $('offline').style.display = 'inline';
+    }
+    item.loading = false;
+    if (current.expanded === i) current.displayed = itemDisplayed(item);
+    paintTermList();
+    fitWindow();
+  }
+}
+
+async function showTerms(payload) {
   const id = ++seqId;
+  overlayNeedsAnchor = true;
   resetFix();
   hideHint();
+  const terms = Array.isArray(payload) ? payload : (payload && payload.terms) || [];
+  const omitted = Array.isArray(payload) ? 0 : (payload && payload.omitted) || 0;
   if (!terms || terms.length === 0) {
     showSinglePane();
     $('term').textContent = '(未提取到英文术语)';
@@ -248,12 +483,17 @@ async function showTerms(terms) {
     fitWindow();
     return;
   }
-  current = { terms, idx: 0 };
+  current = { terms, omitted, idx: 0, mode: 'single', rows: [], expanded: 0 };
+  if (terms.length >= 2) {
+    await renderTermList(id);
+    return;
+  }
   await renderTerm(0, id);
 }
 
 function showSelectionFailed(msg) {
   const id = ++seqId;
+  overlayNeedsAnchor = true;
   resetFix();
   hideHint();
   current = null;
@@ -263,6 +503,7 @@ function showSelectionFailed(msg) {
   $('note').textContent = msg || '未能读取当前选区。请先划选再取词；终端等应用暂不支持。';
   $('acts').style.display = 'none';
   $('cands').innerHTML = '';
+  hideTermList();
   $('loading').textContent = '';
   $('offline').style.display = 'none';
   $('layer').textContent = '';
@@ -277,6 +518,7 @@ async function renderTerm(i, incomingId) {
   current.idx = i;
   resetFix();
   hideHint();
+  current.mode = 'single';
   const en = current.terms[i];
   showSinglePane();
   $('term').textContent = en;
@@ -340,6 +582,13 @@ $('bAdopt').onclick = async () => {
   try {
     await invoke('adopt', { en: d.en, zh: d.zh, domain: d.domain || 'general', note: d.note || '' });
     flash('已沉淀到个人层');
+    if (current.mode === 'list') {
+      d.status = 'active';
+      d.layer = 'personal';
+      const row = current.rows[current.expanded];
+      if (row) row.hit = d;
+      paintTermList();
+    }
   } catch (e) {
     flash('采纳失败: ' + e);
   }
@@ -358,6 +607,12 @@ $('bFixOk').onclick = async () => {
     await invoke('fix', { en: d.en, zh });
     flash('已按你的译法沉淀');
     resetFix();
+    if (current.mode === 'list' && current.rows[current.expanded]) {
+      const row = current.rows[current.expanded];
+      row.hit = Object.assign({}, row.hit || { en: d.en, domain: 'general', note: '' }, { zh, status: 'active', layer: 'personal' });
+      current.displayed = row.hit;
+      paintTermList();
+    }
     fitWindow();
   } catch (e) {
     flash('修改失败: ' + e);
@@ -368,6 +623,16 @@ $('bReject').onclick = async () => {
   try {
     await invoke('reject', { en: current.displayed.en });
     flash('已否决');
+    if (current.mode === 'list') {
+      const row = current.rows[current.expanded];
+      if (row) {
+        row.hit = null;
+        row.candidates = [];
+        row.cloudError = '已否决';
+        current.displayed = null;
+      }
+      paintTermList();
+    }
   } catch (e) {
     flash('否决失败: ' + e);
   }
@@ -380,7 +645,7 @@ function flash(msg) {
 
 $('term').style.cursor = 'pointer';
 $('term').onclick = () => {
-  if (current && current.terms && current.terms.length > 1) {
+  if (current && current.mode !== 'list' && current.terms && current.terms.length > 1) {
     renderTerm((current.idx + 1) % current.terms.length);
   }
 };

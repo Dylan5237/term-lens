@@ -1,9 +1,10 @@
 # Term Lens 配置 (修改后自动生效: 每次兜底请求时重读)
 # 产品: Windows 托盘划词注释器，不是终端透镜；不支持终端取词。
 # H1: 云端默认关闭。base_url 为空则不发任何请求。
-# 仅允许 https，或 host 为 loopback 的 http（127.0.0.1 / localhost / ::1）。
+# 仅允许 https，或明文 http 的 loopback / RFC1918 字面量 IP（如 192.168.x）。
 # 密钥不要写在本文件：使用 Windows 凭据管理器目标名 TermLens/api_key（或环境变量 TERM_LENS_API_KEY）。
 # 本机 loopback 代理示例: base_url = "http://127.0.0.1:10100/v1"
+# 内网 OpenAI 兼容网关示例: base_url = "http://192.168.3.77:13000/v1"
 # 官方 DeepSeek（OpenAI 兼容）: base_url = "https://api.deepseek.com"
 
 [provider]
