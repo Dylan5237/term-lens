@@ -1,6 +1,6 @@
 [package]
 name = "term-lens"
-version = "0.1.3"
+version = "0.1.4"
 description = "Windows 托盘划词注释器 (不是终端透镜)"
 edition = "2021"
 
@@ -27,6 +27,7 @@ dirs = "5"
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Accessibility",

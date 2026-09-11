@@ -2,10 +2,139 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const getCurrentWindow = () => window.__TAURI__.window.getCurrentWindow();
 
+const POPUP_WIDTH = 360;
+const POPUP_MAX_HEIGHT = 640;
+const POPUP_MIN_HEIGHT = 120;
+const POPUP_MARGIN = 12;
+const POPUP_SLACK = 16;
+const POPUP_EDGE = 12;
+
 let current = null;
 let seqId = 0;
+let fitTimer = 0;
 
 function $(id) { return document.getElementById(id); }
+
+function fitWindow() {
+  clearTimeout(fitTimer);
+  fitTimer = setTimeout(() => { void fitWindowNow(); }, 0);
+}
+
+function definitionBlock() {
+  const note = $('note');
+  const cands = $('cands');
+  if (note && note.style.display !== 'none' && note.textContent) return note;
+  if (cands && cands.children.length) return cands;
+  return null;
+}
+
+function clearDefinitionScroll() {
+  ['note', 'cands'].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.classList.remove('scroll');
+    el.style.maxHeight = '';
+  });
+}
+
+function workAreaPhysical(monitor, scale) {
+  const wa = monitor && monitor.workArea;
+  if (wa && wa.position && wa.size) {
+    return { x: wa.position.x, y: wa.position.y, w: wa.size.width, h: wa.size.height };
+  }
+  if (monitor && monitor.position && monitor.size) {
+    return { x: monitor.position.x, y: monitor.position.y, w: monitor.size.width, h: monitor.size.height };
+  }
+  return { x: 0, y: 0, w: 1920 * scale, h: 1080 * scale };
+}
+
+async function resolveMonitor(win, cursor) {
+  try {
+    if (cursor) {
+      const m = await win.monitorFromPoint(cursor.x, cursor.y);
+      if (m) return m;
+    }
+  } catch (_) { /* fall through */ }
+  try {
+    const m = await win.currentMonitor();
+    if (m) return m;
+  } catch (_) { /* fall through */ }
+  try {
+    return await win.primaryMonitor();
+  } catch (_) {
+    return null;
+  }
+}
+
+function clampToWorkArea(x, y, pw, ph, area, pad) {
+  const minX = area.x + pad;
+  const minY = area.y + pad;
+  const maxX = area.x + area.w - pw - pad;
+  const maxY = area.y + area.h - ph - pad;
+  return {
+    x: Math.min(Math.max(x, minX), Math.max(minX, maxX)),
+    y: Math.min(Math.max(y, minY), Math.max(minY, maxY)),
+  };
+}
+
+async function fitWindowNow() {
+  const card = $('card');
+  const dpi = window.__TAURI__.dpi;
+  if (!card || !dpi || !dpi.LogicalSize) return;
+  const win = getCurrentWindow();
+  clearDefinitionScroll();
+  card.style.maxHeight = 'none';
+  const body = definitionBlock();
+  const bodyH = body ? body.offsetHeight : 0;
+  const chrome = card.offsetHeight - bodyH;
+  const natural = Math.ceil(card.offsetHeight + POPUP_MARGIN);
+  card.style.maxHeight = '';
+
+  let cursor = null;
+  try { cursor = await win.cursorPosition(); } catch (_) { /* no cursor */ }
+  const scale = await win.scaleFactor().catch(() => 1);
+  const monitor = await resolveMonitor(win, cursor);
+  const area = workAreaPhysical(monitor, scale);
+  const maxH = Math.max(
+    POPUP_MIN_HEIGHT,
+    Math.min(POPUP_MAX_HEIGHT, Math.floor((area.h / scale) * 2 / 3))
+  );
+  const height = Math.max(POPUP_MIN_HEIGHT, Math.min(natural + POPUP_SLACK, maxH));
+  let applied = height;
+  try {
+    applied = await invoke('place_overlay', { width: POPUP_WIDTH, height });
+  } catch (_) {
+    try {
+      await win.setSize(new dpi.LogicalSize(POPUP_WIDTH, height));
+    } catch (_) {
+      return;
+    }
+    if (dpi.PhysicalPosition) {
+      try {
+        const [pos, size] = await Promise.all([win.outerPosition(), win.outerSize()]);
+        const pad = POPUP_EDGE * scale;
+        let x = pos.x;
+        let y = pos.y;
+        if (cursor && y + size.height > area.y + area.h - pad) {
+          const above = cursor.y - size.height - pad;
+          if (above >= area.y + pad) y = above;
+        }
+        if (cursor && x + size.width > area.x + area.w - pad) {
+          const left = cursor.x - size.width - pad;
+          if (left >= area.x + pad) x = left;
+        }
+        const next = clampToWorkArea(x, y, size.width, size.height, area, pad);
+        if (next.x !== pos.x || next.y !== pos.y) {
+          await win.setPosition(new dpi.PhysicalPosition(next.x, next.y));
+        }
+      } catch (_) { /* keep current position */ }
+    }
+  }
+  if (body && natural + POPUP_SLACK > applied) {
+    body.style.maxHeight = Math.max(48, applied - POPUP_MARGIN - chrome) + 'px';
+    body.classList.add('scroll');
+  }
+}
 
 function resetFix() {
   const f = $('fix'); if (!f) return;
@@ -61,6 +190,7 @@ function renderHit(t) {
   $('cands').innerHTML = '';
   $('loading').textContent = '';
   $('acts').style.display = 'flex';
+  fitWindow();
 }
 
 function sameSense(a, b) {
@@ -102,6 +232,7 @@ function renderSenseList(cands, preferred) {
   });
   $('loading').textContent = '';
   $('acts').style.display = 'flex';
+  fitWindow();
 }
 
 async function showTerms(terms) {
@@ -114,6 +245,7 @@ async function showTerms(terms) {
     $('zh').textContent = ''; $('note').textContent = '';
     $('acts').style.display = 'none'; $('cands').innerHTML = '';
     $('loading').textContent = '';
+    fitWindow();
     return;
   }
   current = { terms, idx: 0 };
@@ -135,6 +267,7 @@ function showSelectionFailed(msg) {
   $('offline').style.display = 'none';
   $('layer').textContent = '';
   $('domain').textContent = '';
+  fitWindow();
   return id;
 }
 
@@ -152,6 +285,7 @@ async function renderTerm(i, incomingId) {
   $('offline').style.display = 'none';
   $('acts').style.display = 'none';
   $('loading').textContent = '查询中…';
+  fitWindow();
 
   let res;
   try {
@@ -159,6 +293,7 @@ async function renderTerm(i, incomingId) {
   } catch (e) {
     if (id !== seqId) return;
     $('loading').textContent = '本地查询失败: ' + e;
+    fitWindow();
     return;
   }
   if (id !== seqId) return;
@@ -190,10 +325,12 @@ async function renderTerm(i, incomingId) {
       }
     } else {
       $('zh').textContent = cloud.error || '无结果';
+      fitWindow();
     }
   } catch (e) {
     if (id !== seqId) return;
     $('loading').textContent = '兜底失败: ' + e;
+    fitWindow();
   }
 }
 
@@ -211,6 +348,7 @@ $('bFix').onclick = () => {
   const f = $('fix');
   const on = f.classList.toggle('on');
   if (on) { $('fixInput').focus(); } else { $('fixInput').value = ''; }
+  fitWindow();
 };
 $('bFixOk').onclick = async () => {
   const zh = $('fixInput').value.trim();
@@ -220,6 +358,7 @@ $('bFixOk').onclick = async () => {
     await invoke('fix', { en: d.en, zh });
     flash('已按你的译法沉淀');
     resetFix();
+    fitWindow();
   } catch (e) {
     flash('修改失败: ' + e);
   }
@@ -248,7 +387,7 @@ $('term').onclick = () => {
 
 window.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    if ($('fix').classList.contains('on')) { resetFix(); return; }
+    if ($('fix').classList.contains('on')) { resetFix(); fitWindow(); return; }
     getCurrentWindow().hide();
     return;
   }

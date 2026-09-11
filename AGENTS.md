@@ -20,7 +20,7 @@
 - **密钥只走 Windows 凭据管理器**（或环境变量 `TERM_LENS_API_KEY`），禁止把 api_key 当作 config.toml 的正路。启动时可一次性从 toml 迁出后删除文件中的 key。
 - **取词优先不碰剪贴板**：UI Automation / 原生 Edit 读当前选区。Electron/Cursor 等读不到时，才短暂 Ctrl+C：先写入探针、复制后立刻还原用户剪贴板；非文本剪贴板（截图/文件）不走回退。禁止把「剪贴板未变化」当选区。读不到则中止，不 lookup、不上云、不写 query_log。同一词再划一次仍应查询。
 
-## 产品冻结（自 0.1.2；当前发版 0.1.3）
+## 产品冻结（自 0.1.2；当前发版 0.1.4）
 
 这是 **Windows 托盘划词注释器**，不是终端透镜。不支持终端取词。取词优先 UIA，失败才探针式 Ctrl+C 并立刻还原剪贴板。默认无云端。
 
@@ -39,4 +39,4 @@
 - 验收看 DESIGN.md §9 指标表；p95 必须是真正 95 分位。达不到门槛先查数据模型，别先堆功能。
 - 术语裁决默认规范（L1 未覆盖时）：Agent→智能体（禁用"代理"）、Tool Use→工具使用、token 在 LLM 语境锁定「词元」。
 - Git：提交信息 conventional commits；`src-tauri/target/` 不入库；DESIGN.md 与 AGENTS.md 是权威源，改行为先改文档。
-- 版本号：Cargo.toml、tauri.conf.json、README 安装说明统一 **0.1.3**。
+- 版本号：Cargo.toml、tauri.conf.json、README 安装说明统一 **0.1.4**。

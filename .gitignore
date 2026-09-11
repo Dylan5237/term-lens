@@ -1,3 +1,4 @@
+.worktree/
 src-tauri/target/
 src-tauri/target-*/
 dist/

@@ -150,29 +150,133 @@ fn show_overlay(app: &AppHandle, terms: &[String]) {
     });
 }
 
+const POPUP_MAX_LOGICAL_H: f64 = 640.0;
+const POPUP_MIN_LOGICAL_H: f64 = 120.0;
+const POPUP_WORK_FRAC: f64 = 2.0 / 3.0;
+
+fn cursor_work_area(w: &WebviewWindow, px: f64, py: f64, scale: f64) -> (f64, f64, f64, f64) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Foundation::{POINT, RECT};
+        use windows::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        };
+        unsafe {
+            let mon = MonitorFromPoint(
+                POINT {
+                    x: px as i32,
+                    y: py as i32,
+                },
+                MONITOR_DEFAULTTONEAREST,
+            );
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                rcMonitor: RECT::default(),
+                rcWork: RECT::default(),
+                dwFlags: 0,
+            };
+            if GetMonitorInfoW(mon, &mut info).as_bool() {
+                let r = info.rcWork;
+                return (
+                    r.left as f64,
+                    r.top as f64,
+                    (r.right - r.left) as f64,
+                    (r.bottom - r.top) as f64,
+                );
+            }
+        }
+    }
+    let mon = w
+        .monitor_from_point(px, py)
+        .ok()
+        .flatten()
+        .or_else(|| w.current_monitor().ok().flatten())
+        .or_else(|| w.primary_monitor().ok().flatten());
+    mon.as_ref()
+        .map(|m| {
+            let wa = m.work_area();
+            (
+                wa.position.x as f64,
+                wa.position.y as f64,
+                wa.size.width as f64,
+                wa.size.height as f64,
+            )
+        })
+        .unwrap_or((0.0, 0.0, 1920.0 * scale, 1080.0 * scale))
+}
+
+fn clamp_overlay_pos(
+    px: f64,
+    py: f64,
+    pw: f64,
+    ph: f64,
+    wx: f64,
+    wy: f64,
+    ww: f64,
+    wh: f64,
+    scale: f64,
+    fixed: bool,
+) -> (f64, f64) {
+    let pad = 12.0 * scale;
+    let (mut fx, mut fy) = if fixed {
+        (wx + ww - pw - 24.0 * scale, wy + wh - ph - 60.0 * scale)
+    } else {
+        (px + pad, py + 16.0 * scale)
+    };
+    if fy + ph > wy + wh - pad {
+        fy = py - ph - pad;
+    }
+    if fx + pw > wx + ww - pad {
+        fx = px - pw - pad;
+    }
+    let min_x = wx + pad;
+    let min_y = wy + pad;
+    let max_x = (wx + ww - pw - pad).max(min_x);
+    let max_y = (wy + wh - ph - pad).max(min_y);
+    (
+        fx.max(min_x).min(max_x),
+        fy.max(min_y).min(max_y),
+    )
+}
+
 fn position_window(w: &WebviewWindow, px: f64, py: f64, fixed: bool) {
     let scale = w.scale_factor().unwrap_or(1.0);
     let (pw, ph) = w
         .outer_size()
         .map(|s| (s.width as f64, s.height as f64))
         .unwrap_or((360.0 * scale, 230.0 * scale));
-    let (sw, sh) = w
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| {
-            let sz = m.size();
-            (sz.width as f64, sz.height as f64)
-        })
-        .unwrap_or((1920.0 * scale, 1080.0 * scale));
-    let (fx, fy) = if fixed {
-        (sw - pw - 24.0 * scale, sh - ph - 60.0 * scale)
-    } else {
-        (px + 8.0 * scale, py + 16.0 * scale)
-    };
-    let cx = fx.max(0.0).min((sw - pw).max(0.0)) / scale;
-    let cy = fy.max(0.0).min((sh - ph).max(0.0)) / scale;
-    let _ = w.set_position(tauri::LogicalPosition::new(cx, cy));
+    let (wx, wy, ww, wh) = cursor_work_area(w, px, py, scale);
+    let max_ph = (wh * POPUP_WORK_FRAC).min(POPUP_MAX_LOGICAL_H * scale);
+    let ph = ph.min(max_ph).max(POPUP_MIN_LOGICAL_H * scale);
+    let _ = w.set_size(tauri::LogicalSize::new(
+        pw / scale,
+        ph / scale,
+    ));
+    let (fx, fy) = clamp_overlay_pos(px, py, pw, ph, wx, wy, ww, wh, scale, fixed);
+    let _ = w.set_position(tauri::PhysicalPosition::new(fx, fy));
+}
+
+#[tauri::command]
+fn place_overlay(app: tauri::AppHandle, width: f64, height: f64) -> Result<f64, String> {
+    let w = app
+        .get_webview_window("main")
+        .ok_or_else(|| "no overlay window".to_string())?;
+    let (px, py) = get_cursor_pos();
+    let scale = w.scale_factor().map_err(|e| e.to_string())?;
+    let (wx, wy, ww, wh) = cursor_work_area(&w, px, py, scale);
+    let max_h = (wh / scale * POPUP_WORK_FRAC)
+        .min(POPUP_MAX_LOGICAL_H)
+        .max(POPUP_MIN_LOGICAL_H);
+    let h = height.min(max_h).max(POPUP_MIN_LOGICAL_H);
+    let pw = width * scale;
+    let ph = h * scale;
+    let fixed = load_config().ui.position == "fixed";
+    w.set_size(tauri::LogicalSize::new(width, h))
+        .map_err(|e| e.to_string())?;
+    let (fx, fy) = clamp_overlay_pos(px, py, pw, ph, wx, wy, ww, wh, scale, fixed);
+    w.set_position(tauri::PhysicalPosition::new(fx, fy))
+        .map_err(|e| e.to_string())?;
+    Ok(h)
 }
 
 fn wait_modifiers_released() {
@@ -1100,7 +1204,8 @@ fn main() {
             fix,
             reject,
             export_terms,
-            stats
+            stats,
+            place_overlay
         ])
         .run(tauri::generate_context!())
         .expect("error while running TermLens");

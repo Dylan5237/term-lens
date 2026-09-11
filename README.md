@@ -34,7 +34,7 @@
 
 前置：**Windows 10/11**、[MSVC 工具链](https://visualstudio.microsoft.com/visual-cpp-build-tools/)（安装「使用 C++ 的桌面开发」）、系统自带或引导安装 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) Runtime。
 
-1. Releases 下载 `TermLens_0.1.3_x64-setup.exe` 安装（免管理员权限，currentUser）
+1. Releases 下载 `TermLens_0.1.4_x64-setup.exe` 安装（免管理员权限，currentUser）
 2. 运行后进程常驻托盘——**默认就是安静的、不上云的**
 3. 在普通桌面窗口划选包含英文术语的文本，双击 `Ctrl`
 
@@ -101,7 +101,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release            # 绿色版 exe: target\release\term-lens.exe
 cd ..
 npx tauri build                  # NSIS 安装包
-# 产物: src-tauri\target\release\bundle\nsis\TermLens_0.1.3_x64-setup.exe
+# 产物: src-tauri\target\release\bundle\nsis\TermLens_0.1.4_x64-setup.exe
 ```
 
 `package.json` 脚本：`npm test`（cargo test）、`npm run dev`、`npm run build`。
