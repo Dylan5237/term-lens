@@ -158,7 +158,8 @@ pub fn lookup_local(conn: &Connection, en: &str) -> rusqlite::Result<Vec<Term>> 
     Ok(out)
 }
 
-/// best==0 且多候选时不猜，返回 None（调用方仍持有 candidates）。
+/// best==0 且多**译法**时不猜，返回 None（调用方仍持有 candidates）。
+/// 同译同域的跨层行不算多义，取最高层。
 pub fn pick_term(terms: &[Term], context: &str) -> Option<Term> {
     if terms.is_empty() {
         return None;
@@ -169,7 +170,12 @@ pub fn pick_term(terms: &[Term], context: &str) -> Option<Term> {
         .map(|(i, t)| (layer_rank(&t.layer), i))
         .collect();
     indexed.sort_by_key(|(rank, _)| -rank);
-    if terms.len() == 1 {
+    let unique_meanings = terms
+        .iter()
+        .map(|t| (t.en.as_str(), t.zh.as_str(), t.domain.as_str()))
+        .collect::<HashSet<_>>()
+        .len();
+    if terms.len() == 1 || unique_meanings <= 1 {
         return Some(terms[indexed[0].1].clone());
     }
     let ctx = context.to_lowercase();
@@ -474,36 +480,62 @@ fn ident_parts(word: &str) -> Vec<String> {
 }
 
 /// 按 ASCII 字母数字切词（CJK 紧贴视为边界）。`_` / `-` 夹在词段之间时并入同一标识符。
-/// 返回 (词, 后接空格)——空格仍用于短语 bigram，不把 snake/kebab 拆开。
-fn ascii_tokens(text: &str) -> Vec<(String, Option<char>)> {
-    let chars: Vec<char> = text.chars().collect();
+struct AsciiTok {
+    word: String,
+    start: usize,
+    end: usize,
+}
+
+fn ascii_tokens_spanned(text: &str) -> Vec<AsciiTok> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
     let mut out = Vec::new();
     let mut i = 0;
     while i < chars.len() {
-        if !chars[i].is_ascii_alphabetic() {
+        if !chars[i].1.is_ascii_alphabetic() {
             i += 1;
             continue;
         }
-        let start = i;
+        let start = chars[i].0;
         i += 1;
         while i < chars.len() {
-            if chars[i].is_ascii_alphanumeric() {
+            let c = chars[i].1;
+            if c.is_ascii_alphanumeric() {
                 i += 1;
                 continue;
             }
-            if is_ident_joiner(chars[i])
-                && chars.get(i + 1).is_some_and(|c| c.is_ascii_alphanumeric())
+            if is_ident_joiner(c)
+                && chars
+                    .get(i + 1)
+                    .is_some_and(|(_, n)| n.is_ascii_alphanumeric())
             {
                 i += 1;
                 continue;
             }
             break;
         }
-        let word: String = chars[start..i].iter().collect();
-        let sep = chars.get(i).copied().filter(|c| *c == ' ');
-        out.push((word, sep));
+        let end = if i < chars.len() {
+            chars[i].0
+        } else {
+            text.len()
+        };
+        let word = text[start..end].to_string();
+        out.push(AsciiTok { word, start, end });
     }
     out
+}
+
+fn ascii_tokens(text: &str) -> Vec<(String, Option<char>)> {
+    ascii_tokens_spanned(text)
+        .into_iter()
+        .map(|t| {
+            let sep = text[t.end..].chars().next().filter(|c| *c == ' ');
+            (t.word, sep)
+        })
+        .collect()
+}
+
+fn gap_only_whitespace(text: &str, end: usize, start: usize) -> bool {
+    start >= end && text[end..start].chars().all(|c| c.is_whitespace())
 }
 
 fn push_unique(out: &mut Vec<String>, seen: &mut HashSet<String>, w: &str, max: usize) -> bool {
@@ -524,33 +556,49 @@ fn extract_capped(text: &str, max: usize) -> Vec<String> {
             return out;
         }
     }
-    let tokens = ascii_tokens(text);
-    for i in 0..tokens.len() {
-        let word = &tokens[i].0;
-        if push_unique(&mut out, &mut seen, word, max) {
+    let tokens = ascii_tokens_spanned(text);
+    let mut i = 0;
+    while i < tokens.len() {
+        if is_stopword(&tokens[i].word) {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j + 1 < tokens.len()
+            && !is_stopword(&tokens[j + 1].word)
+            && gap_only_whitespace(text, tokens[j].end, tokens[j + 1].start)
+            && (j + 1 - i + 1) <= MAX_SHORT_TERM_SEGMENTS
+        {
+            j += 1;
+        }
+        let phrase = if i == j {
+            tokens[i].word.clone()
+        } else {
+            tokens[i..=j]
+                .iter()
+                .map(|t| t.word.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        if push_unique(&mut out, &mut seen, &phrase, max) {
             break;
         }
-        for part in ident_parts(word) {
-            if part.eq_ignore_ascii_case(word) {
-                continue;
-            }
-            if push_unique(&mut out, &mut seen, &part, max) {
-                return out;
-            }
-        }
-        if let (Some(' '), Some((next, _))) = (tokens[i].1, tokens.get(i + 1)) {
-            if !is_stopword(word) && !is_stopword(next) {
-                let bigram = format!("{word} {next}");
-                if push_unique(&mut out, &mut seen, &bigram, max) {
-                    break;
+        if i == j {
+            for part in ident_parts(&tokens[i].word) {
+                if part.eq_ignore_ascii_case(&tokens[i].word) {
+                    continue;
+                }
+                if push_unique(&mut out, &mut seen, &part, max) {
+                    return out;
                 }
             }
         }
+        i = j + 1;
     }
     out
 }
 
-/// ASCII 词边界，CJK 紧贴可抽出；标识符整段优先；短选区整段当第一词；满 8 个早停。
+/// ASCII 词边界，CJK 紧贴可抽出；仅空白相连的英文收成短语；标识符整段优先；短选区整段当第一词；满 8 个早停。
 pub fn extract_terms(text: &str) -> Vec<String> {
     extract_capped(text, MAX_EXTRACT)
 }

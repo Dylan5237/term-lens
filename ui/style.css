@@ -11,6 +11,8 @@ html,body { height:100%; background:transparent; overflow:hidden; font-family:"M
   display:flex; flex-direction:column; max-height:calc(100% - 12px); overflow:hidden;
 }
 #head { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+#layers { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+.sense-layers { display:flex; align-items:center; gap:4px; flex-wrap:wrap; margin-top:2px; }
 #head.off { display:none; }
 #term { font-size:14px; font-weight:500; color:var(--accent); font-family:Consolas,monospace; }
 .chip { font-size:11px; padding:1px 6px; border-radius:8px; color:var(--muted); }
@@ -24,6 +26,10 @@ html,body { height:100%; background:transparent; overflow:hidden; font-family:"M
 #hint.off { display:none; }
 #listHead { display:flex; align-items:baseline; flex-wrap:wrap; gap:6px 10px; margin-bottom:6px; padding-bottom:8px; border-bottom:1px solid var(--border); font-size:13px; }
 #listHead.off { display:none; }
+#gloss { margin:0 0 8px; padding-bottom:8px; border-bottom:1px solid var(--border); }
+#gloss.off { display:none; }
+#glossSrc { font-size:11px; color:var(--muted); line-height:1.4; overflow-wrap:anywhere; }
+#glossZh { font-size:13px; color:var(--fg); line-height:1.45; margin-top:4px; overflow-wrap:anywhere; }
 #listUnknown { font-weight:600; color:var(--accent); }
 #listKnown, #listMore { font-size:12px; color:var(--muted); }
 #listHead #offline { margin-left:auto; }

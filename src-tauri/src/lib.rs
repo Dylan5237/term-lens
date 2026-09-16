@@ -47,8 +47,7 @@ mod tests {
         let cjk = extract_terms("一个blocked_field实例");
         assert_eq!(cjk[0], "blocked_field");
         let phrase = extract_terms("tool use");
-        assert_eq!(phrase[0], "tool use");
-        assert!(phrase.iter().any(|t| t == "tool"));
+        assert_eq!(phrase, vec!["tool use".to_string()]);
     }
 
     #[test]
@@ -95,6 +94,25 @@ mod tests {
         assert_eq!(terms.len(), MAX_EXTRACT);
         assert_eq!(omitted, 4);
         assert_eq!(extract_terms(&words), terms);
+    }
+
+    #[test]
+    fn extract_sentence_keeps_adjacent_phrases_not_permutations() {
+        let terms = extract_terms("把 JWT session 的 access token 写进 Authorization 头。");
+        assert_eq!(
+            terms,
+            vec![
+                "JWT session".to_string(),
+                "access token".into(),
+                "Authorization".into()
+            ]
+        );
+        assert!(!terms
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case("session access")));
+        assert!(!terms
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case("token Authorization")));
     }
 
     #[test]
@@ -330,6 +348,37 @@ mod tests {
         assert!(pick_term(&terms, "hello world").is_none());
         let hit = pick_term(&terms, "jwt session").unwrap();
         assert_eq!(hit.zh, "令牌");
+    }
+
+    #[test]
+    fn pick_same_meaning_across_layers_is_not_ambiguous() {
+        let terms = vec![
+            Term {
+                en: "runtime".into(),
+                zh: "程序运行时环境".into(),
+                domain: "general".into(),
+                ctx_hints: vec![],
+                keep_policy: "translate".into(),
+                note: "程序运行时的执行环境".into(),
+                layer: "ai".into(),
+                source: "manual".into(),
+                status: "active".into(),
+            },
+            Term {
+                en: "runtime".into(),
+                zh: "程序运行时环境".into(),
+                domain: "general".into(),
+                ctx_hints: vec![],
+                keep_policy: "translate".into(),
+                note: "程序运行时的执行环境".into(),
+                layer: "personal".into(),
+                source: "user-adopted".into(),
+                status: "active".into(),
+            },
+        ];
+        let hit = pick_term(&terms, "").unwrap();
+        assert_eq!(hit.layer, "personal");
+        assert_eq!(hit.zh, "程序运行时环境");
     }
 
     #[test]

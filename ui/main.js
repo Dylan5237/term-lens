@@ -75,15 +75,53 @@ function showListHead(unknown, known, omitted) {
   $('listMore').textContent = omitted > 0 ? '还有 ' + omitted + ' 个未列' : '';
 }
 
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hideGloss() {
+  const g = $('gloss');
+  if (g) g.classList.add('off');
+}
+
+function paintGloss() {
+  const box = $('gloss');
+  const srcEl = $('glossSrc');
+  const zhEl = $('glossZh');
+  if (!box || !srcEl || !zhEl) return;
+  const src = current && current.source;
+  if (!src || !String(src).trim()) {
+    hideGloss();
+    return;
+  }
+  const pairs = [];
+  if (current.rows && current.rows.length) {
+    current.rows.forEach(item => {
+      if (item.hit && item.hit.zh) pairs.push({ en: item.en, zh: item.hit.zh });
+    });
+  } else if (current.displayed && current.displayed.zh) {
+    pairs.push({ en: current.displayed.en || current.terms[current.idx], zh: current.displayed.zh });
+  }
+  pairs.sort((a, b) => b.en.length - a.en.length);
+  let glossed = src;
+  pairs.forEach(p => {
+    if (!p.en) return;
+    glossed = glossed.replace(new RegExp(escapeRegExp(p.en), 'gi'), p.zh);
+  });
+  srcEl.textContent = src;
+  zhEl.textContent = glossed;
+  box.classList.toggle('off', glossed === src && pairs.length === 0);
+}
+
 function isUnknownItem(item) {
   if (item.hit && item.hit.status === 'pending') return true;
-  if (item.candidates && item.candidates.length > 1 && !item.hit) return true;
+  if (meaningCount(item.candidates) > 1 && !item.hit) return true;
   return !item.hit;
 }
 
 function itemZh(item) {
   if (item.hit) return item.hit.zh || '';
-  if (item.candidates && item.candidates.length > 1) return '多义';
+  if (meaningCount(item.candidates) > 1) return '多义';
   if (item.cloudError) return item.cloudError;
   return '未命中';
 }
@@ -240,22 +278,79 @@ function layerLabel(t) {
   return t.layer || '';
 }
 
-function setHeadMeta(t) {
-  if (current && current.mode === 'list') {
-    $('layer').textContent = '';
-    $('layer').className = 'chip';
-    $('domain').textContent = '';
-    return;
-  }
-  const chip = $('layer');
-  if (!t) {
-    chip.textContent = '多义';
+function layerRank(t) {
+  if (t.layer === 'personal') return 2;
+  if (t.layer === 'ai') return 1;
+  if (t.layer === 'ms') return 0;
+  return -1;
+}
+
+function sameMeaning(a, b) {
+  return a && b && a.en === b.en && a.zh === b.zh && a.domain === b.domain;
+}
+
+function meaningCount(cands) {
+  const keys = new Set();
+  (cands || []).forEach(c => keys.add((c.zh || '') + '\0' + (c.domain || '')));
+  return keys.size;
+}
+
+function mergeSenses(cands) {
+  const groups = [];
+  (cands || []).forEach(c => {
+    let g = groups.find(x => sameMeaning(x.primary, c));
+    if (!g) {
+      g = { primary: c, layers: [] };
+      groups.push(g);
+    }
+    g.layers.push(c);
+    if (layerRank(c) > layerRank(g.primary)) g.primary = c;
+  });
+  return groups;
+}
+
+function fillChips(box, terms, extraLabel) {
+  if (!box) return;
+  box.innerHTML = '';
+  const seen = new Set();
+  (terms || []).slice().sort((a, b) => layerRank(b) - layerRank(a)).forEach(t => {
+    const label = layerLabel(t);
+    const key = label + '|' + (t.status || '') + '|' + (t.layer || '');
+    if (!label || seen.has(key)) return;
+    seen.add(key);
+    const chip = document.createElement('span');
+    chip.className = 'chip ' + (t.status === 'pending' ? 'pending' : t.layer || '');
+    chip.textContent = label;
+    box.appendChild(chip);
+  });
+  if (extraLabel) {
+    const chip = document.createElement('span');
     chip.className = 'chip';
+    chip.textContent = extraLabel;
+    box.appendChild(chip);
+  }
+}
+
+function setHeadMeta(t, siblings) {
+  const box = $('layers');
+  if (current && current.mode === 'list') {
+    if (box) box.innerHTML = '';
     $('domain').textContent = '';
     return;
   }
-  chip.textContent = layerLabel(t);
-  chip.className = 'chip ' + (t.status === 'pending' ? 'pending' : t.layer || '');
+  if (!t) {
+    fillChips(box, []);
+    if (box) {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = '多义';
+      box.appendChild(chip);
+    }
+    $('domain').textContent = '';
+    return;
+  }
+  const rows = (siblings || []).filter(c => sameMeaning(c, t));
+  fillChips(box, rows.length ? rows : [t]);
   $('domain').textContent = t.domain && t.domain !== 'general' ? '[' + t.domain + ']' : '';
 }
 
@@ -263,31 +358,35 @@ function orderedSenses(item) {
   const cands = (item && item.candidates && item.candidates.length)
     ? item.candidates.slice()
     : (item && item.hit ? [item.hit] : []);
-  if (!cands.length || !item.hit) return cands;
+  const groups = mergeSenses(cands);
+  if (!item || !item.hit) return groups;
   const pref = [];
   const rest = [];
-  cands.forEach(c => (sameSense(c, item.hit) ? pref : rest).push(c));
+  groups.forEach(g => (sameMeaning(g.primary, item.hit) ? pref : rest).push(g));
   return pref.concat(rest);
 }
 
-function appendSense(parent, c, preferred) {
+function appendSense(parent, group, preferred) {
+  const c = group.primary || group;
+  const layers = group.layers || [c];
   const row = document.createElement('div');
   row.className = 'sense' + (preferred ? ' preferred' : '');
   const zh = document.createElement('div');
   zh.className = 'sense-zh';
   zh.textContent = c.zh || '';
   row.appendChild(zh);
-  const bits = [];
-  if (c.domain && c.domain !== 'general') bits.push(c.domain);
-  const layer = layerLabel(c);
-  if (layer) bits.push(layer);
-  if (preferred) bits.push('当前语境');
-  if (bits.length) {
-    const meta = document.createElement('div');
-    meta.className = 'sense-meta';
-    meta.textContent = bits.join(' · ');
-    row.appendChild(meta);
+  const meta = document.createElement('div');
+  meta.className = 'sense-meta';
+  const chips = document.createElement('span');
+  chips.className = 'sense-layers';
+  fillChips(chips, layers, preferred ? '当前语境' : '');
+  meta.appendChild(chips);
+  if (c.domain && c.domain !== 'general') {
+    const dom = document.createElement('span');
+    dom.textContent = ' · ' + c.domain;
+    meta.appendChild(dom);
   }
+  row.appendChild(meta);
   if (c.note) {
     const note = document.createElement('div');
     note.className = 'sense-note';
@@ -297,32 +396,34 @@ function appendSense(parent, c, preferred) {
   parent.appendChild(row);
 }
 
-function renderHit(t) {
+function renderHit(t, siblings) {
   hideHint();
   showSinglePane();
   $('term').textContent = t.en;
   $('zh').textContent = t.zh || '';
   $('note').textContent = t.note || '';
-  setHeadMeta(t);
+  setHeadMeta(t, siblings);
   $('cands').innerHTML = '';
   $('loading').textContent = '';
   $('acts').style.display = 'flex';
+  paintGloss();
   fitWindow();
 }
 
 function sameSense(a, b) {
-  return a && b && a.en === b.en && a.zh === b.zh && a.domain === b.domain && a.layer === b.layer;
+  return sameMeaning(a, b) && a.layer === b.layer;
 }
 
 function renderSenseList(cands, preferred) {
   hideHint();
   hideSinglePane();
-  setHeadMeta(preferred || null);
+  setHeadMeta(preferred || null, cands);
   const box = $('cands');
   box.innerHTML = '';
-  cands.forEach(c => appendSense(box, c, sameSense(c, preferred)));
+  mergeSenses(cands).forEach(g => appendSense(box, g, sameMeaning(g.primary, preferred)));
   $('loading').textContent = '';
   $('acts').style.display = 'flex';
+  paintGloss();
   fitWindow();
 }
 
@@ -341,6 +442,7 @@ function paintTermList() {
   $('cands').innerHTML = '';
   const unknown = current.rows.filter(isUnknownItem).length;
   showListHead(unknown, current.rows.length - unknown, current.omitted || 0);
+  paintGloss();
   current.rows.forEach((item, i) => {
     const row = document.createElement('div');
     const open = current.expanded === i;
@@ -360,7 +462,7 @@ function paintTermList() {
     if (item.hit && item.hit.status === 'pending') {
       chip.textContent = '待确认';
       chip.className = 'chip pending';
-    } else if (item.candidates && item.candidates.length > 1 && !item.hit) {
+    } else if (meaningCount(item.candidates) > 1 && !item.hit) {
       chip.textContent = '多义';
     } else if (item.hit) {
       chip.textContent = '已知';
@@ -387,7 +489,7 @@ function paintTermList() {
       if (senses.length) {
         const well = document.createElement('div');
         well.className = 'sense-well';
-        senses.forEach(c => appendSense(well, c, sameSense(c, item.hit)));
+        senses.forEach(g => appendSense(well, g, sameMeaning(g.primary, item.hit)));
         detail.appendChild(well);
       } else {
         const err = document.createElement('div');
@@ -474,8 +576,10 @@ async function showTerms(payload) {
   hideHint();
   const terms = Array.isArray(payload) ? payload : (payload && payload.terms) || [];
   const omitted = Array.isArray(payload) ? 0 : (payload && payload.omitted) || 0;
+  const source = Array.isArray(payload) ? '' : (payload && payload.source) || '';
   if (!terms || terms.length === 0) {
     showSinglePane();
+    hideGloss();
     $('term').textContent = '(未提取到英文术语)';
     $('zh').textContent = ''; $('note').textContent = '';
     $('acts').style.display = 'none'; $('cands').innerHTML = '';
@@ -483,7 +587,7 @@ async function showTerms(payload) {
     fitWindow();
     return;
   }
-  current = { terms, omitted, idx: 0, mode: 'single', rows: [], expanded: 0 };
+  current = { terms, omitted, source, idx: 0, mode: 'single', rows: [], expanded: 0 };
   if (terms.length >= 2) {
     await renderTermList(id);
     return;
@@ -504,9 +608,10 @@ function showSelectionFailed(msg) {
   $('acts').style.display = 'none';
   $('cands').innerHTML = '';
   hideTermList();
+  hideGloss();
   $('loading').textContent = '';
   $('offline').style.display = 'none';
-  $('layer').textContent = '';
+  if ($('layers')) $('layers').innerHTML = '';
   $('domain').textContent = '';
   fitWindow();
   return id;
@@ -540,7 +645,7 @@ async function renderTerm(i, incomingId) {
   }
   if (id !== seqId) return;
 
-  if (res.candidates && res.candidates.length > 1) {
+  if (meaningCount(res.candidates) > 1) {
     current.displayed = res.hit || null;
     renderSenseList(res.candidates, res.hit || null);
     return;
@@ -548,7 +653,7 @@ async function renderTerm(i, incomingId) {
 
   if (res.hit) {
     current.displayed = res.hit;
-    renderHit(res.hit);
+    renderHit(res.hit, res.candidates);
     return;
   }
 
@@ -560,10 +665,10 @@ async function renderTerm(i, incomingId) {
     if (cloud.offline) $('offline').style.display = 'inline';
     if (cloud.result) {
       current.displayed = cloud.result;
-      if (cloud.candidates && cloud.candidates.length > 1) {
+      if (meaningCount(cloud.candidates) > 1) {
         renderSenseList(cloud.candidates, cloud.result);
       } else {
-        renderHit(cloud.result);
+        renderHit(cloud.result, cloud.candidates);
       }
     } else {
       $('zh').textContent = cloud.error || '无结果';

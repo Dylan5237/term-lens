@@ -116,7 +116,7 @@ fn grab_selection_and_show(app: &AppHandle) {
     }
 
     let (terms, omitted) = extract_report(&selected);
-    show_overlay(app, &terms, omitted);
+    show_overlay(app, &terms, omitted, &selected);
 }
 
 fn emit_selection_failed(app: &AppHandle, msg: &str) {
@@ -138,16 +138,19 @@ fn emit_selection_failed(app: &AppHandle, msg: &str) {
 struct TermsPayload {
     terms: Vec<String>,
     omitted: usize,
+    source: String,
 }
 
-fn show_overlay(app: &AppHandle, terms: &[String], omitted: usize) {
+fn show_overlay(app: &AppHandle, terms: &[String], omitted: usize, source: &str) {
     let app2 = app.clone();
     let (px, py) = get_cursor_pos();
     let fixed = load_config().ui.position == "fixed";
     let win: Option<WebviewWindow> = app2.get_webview_window("main");
+    let source = source.chars().take(512).collect::<String>();
     let payload = TermsPayload {
         terms: terms.to_vec(),
         omitted,
+        source,
     };
     tauri::async_runtime::spawn(async move {
         if let Some(w) = win {
