@@ -566,17 +566,19 @@ async function renderTermList(id) {
     fitWindow();
   };
 
+  const ens = pending.map(i => current.rows[i].en);
   let unlisten = () => {};
   try {
     unlisten = await listen('fallback-item', ev => {
       if (id !== seqId) return;
       const p = ev.payload || {};
+      if (p.seq !== id) return;
       const i = current.rows.findIndex(r => r.en === p.en);
       if (i < 0) return;
       applyCloud(current.rows[i], i, p);
     });
-    const ens = pending.map(i => current.rows[i].en);
-    const clouds = await invoke('fallback_many', { ens });
+    if (id !== seqId) return;
+    const clouds = await invoke('fallback_many', { ens, seq: id });
     if (id !== seqId) return;
     pending.forEach((i, j) => {
       const item = current.rows[i];

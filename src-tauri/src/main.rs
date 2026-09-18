@@ -517,6 +517,7 @@ async fn fallback(app: AppHandle, en: String) -> Result<FallbackResp, String> {
 
 #[derive(Serialize, Clone)]
 struct FallbackItemEvent {
+    seq: u64,
     en: String,
     result: Option<Term>,
     offline: bool,
@@ -524,18 +525,22 @@ struct FallbackItemEvent {
 }
 
 #[tauri::command]
-async fn fallback_many(app: AppHandle, ens: Vec<String>) -> Result<Vec<FallbackResp>, String> {
+async fn fallback_many(
+    app: AppHandle,
+    ens: Vec<String>,
+    seq: u64,
+) -> Result<Vec<FallbackResp>, String> {
     if ens.len() > MAX_EXTRACT {
         return Err("一次最多 8 个未命中词".into());
-    }
-    for en in &ens {
-        validate_fallback_term(en)?;
     }
     let mut handles = Vec::with_capacity(ens.len());
     for en in ens {
         let app = app.clone();
         handles.push(tauri::async_runtime::spawn(async move {
-            let r = cloud_lookup(&en).await;
+            let r = match validate_fallback_term(&en) {
+                Ok(()) => cloud_lookup(&en).await,
+                Err(e) => Err(e),
+            };
             let resp = fallback_resp(r);
             if let Some(t) = &resp.result {
                 {
@@ -549,6 +554,7 @@ async fn fallback_many(app: AppHandle, ens: Vec<String>) -> Result<Vec<FallbackR
             let _ = app.emit(
                 "fallback-item",
                 FallbackItemEvent {
+                    seq,
                     en: en.clone(),
                     result: resp.result.clone(),
                     offline: resp.offline,

@@ -88,7 +88,7 @@ smoke 应理解为"冒烟测试"，Runtime 应理解为"程序运行时环境"�
 - **上下文开关**：删除。云端永远只传术语单词
 - **取词单飞**：同时只跑一次 grab；Alt+T / 托盘翻译必须在后台线程，禁止在事件线程同步 sleep
 - **热键切换**：注册成功后再改内存开关；失败回滚
-- **seqId**：`showTerms` / `renderTerm` 入口发放；lookup 与 fallback 返回后都校验
+- **seqId**：`showTerms` / `renderTerm` 入口发放；lookup 与 fallback 返回后都校验；`fallback_many` 的 `fallback-item` 事件携带本次 seq，过期结果丢弃
 
 ## 5. 数据模型（v0.2 重写：一词多候选 + 决策日志语义）
 
