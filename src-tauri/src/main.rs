@@ -25,6 +25,15 @@ static HOOK_APP: Mutex<Option<AppHandle>> = Mutex::new(None);
 static HOTKEY_MODE: AtomicU8 = AtomicU8::new(0);
 static GRAB_BUSY: AtomicBool = AtomicBool::new(false);
 static FALLBACK_SEQ: AtomicU64 = AtomicU64::new(0);
+static FALLBACK_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+fn claim_fallback_seq(seq: u64) {
+    FALLBACK_SEQ.fetch_max(seq, Ordering::SeqCst);
+}
+
+fn invalidate_stale_fallback() {
+    FALLBACK_EPOCH.fetch_add(1, Ordering::SeqCst);
+}
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -99,6 +108,7 @@ fn grab_selection_and_show(app: &AppHandle) {
         return;
     }
     let _busy = GrabGuard;
+    invalidate_stale_fallback();
     wait_modifiers_released();
 
     let selected = match read_os_selection() {
@@ -422,7 +432,8 @@ struct LookupResult {
 }
 
 #[tauri::command]
-fn lookup(state: State<AppState>, en: String) -> Result<LookupResult, String> {
+fn lookup(state: State<AppState>, en: String, seq: u64) -> Result<LookupResult, String> {
+    claim_fallback_seq(seq);
     let ctx = state
         .last_selection
         .lock()
@@ -449,7 +460,12 @@ struct LookupItem {
 }
 
 #[tauri::command]
-fn lookup_many(state: State<AppState>, ens: Vec<String>) -> Result<Vec<LookupItem>, String> {
+fn lookup_many(
+    state: State<AppState>,
+    ens: Vec<String>,
+    seq: u64,
+) -> Result<Vec<LookupItem>, String> {
+    claim_fallback_seq(seq);
     let ctx = state
         .last_selection
         .lock()
@@ -505,7 +521,7 @@ fn fallback_resp(r: Result<Option<Term>, String>) -> FallbackResp {
 
 #[tauri::command]
 async fn fallback(app: AppHandle, en: String, seq: u64) -> Result<FallbackResp, String> {
-    FALLBACK_SEQ.store(seq, Ordering::SeqCst);
+    claim_fallback_seq(seq);
     Ok(run_one_fallback(app, en, seq, false).await)
 }
 
@@ -522,15 +538,15 @@ fn finish_cloud_lookup(
     app: &AppHandle,
     en: &str,
     seq: u64,
+    epoch: u64,
     did_http: bool,
     latency_ms: i64,
     r: Result<Option<Term>, String>,
     emit_item: bool,
 ) -> FallbackResp {
-    let live = fallback_seq_is_live(FALLBACK_SEQ.load(Ordering::SeqCst), seq);
     let layer = cloud_query_layer(&r);
     let mut resp = fallback_resp(r);
-    {
+    let locked_ok = {
         let st = app.state::<AppState>();
         let locked = st.db.lock();
         match locked {
@@ -538,6 +554,12 @@ fn finish_cloud_lookup(
                 if did_http {
                     let _ = log_query(&conn, en, layer, latency_ms);
                 }
+                let live = fallback_write_live(
+                    FALLBACK_SEQ.load(Ordering::SeqCst),
+                    seq,
+                    FALLBACK_EPOCH.load(Ordering::SeqCst),
+                    epoch,
+                );
                 if live {
                     if let Some(t) = &resp.result {
                         if let Err(e) = upsert(&conn, t) {
@@ -547,16 +569,30 @@ fn finish_cloud_lookup(
                         }
                     }
                 }
+                true
             }
-            Err(_) => {
-                if live && resp.result.is_some() {
-                    resp.result = None;
-                    resp.offline = true;
-                    resp.error = Some("词表锁定失败".into());
-                }
-            }
+            Err(_) => false,
+        }
+    };
+    if !locked_ok {
+        let live = fallback_write_live(
+            FALLBACK_SEQ.load(Ordering::SeqCst),
+            seq,
+            FALLBACK_EPOCH.load(Ordering::SeqCst),
+            epoch,
+        );
+        if live && resp.result.is_some() {
+            resp.result = None;
+            resp.offline = true;
+            resp.error = Some("词表锁定失败".into());
         }
     }
+    let live = fallback_write_live(
+        FALLBACK_SEQ.load(Ordering::SeqCst),
+        seq,
+        FALLBACK_EPOCH.load(Ordering::SeqCst),
+        epoch,
+    );
     if live && emit_item {
         let _ = app.emit(
             "fallback-item",
@@ -573,6 +609,7 @@ fn finish_cloud_lookup(
 }
 
 async fn run_one_fallback(app: AppHandle, en: String, seq: u64, emit_item: bool) -> FallbackResp {
+    let epoch = FALLBACK_EPOCH.load(Ordering::SeqCst);
     let t0 = std::time::Instant::now();
     let (r, did_http) = match validate_fallback_term(&en) {
         Ok(()) => (cloud_lookup(&en).await, true),
@@ -582,6 +619,7 @@ async fn run_one_fallback(app: AppHandle, en: String, seq: u64, emit_item: bool)
         &app,
         &en,
         seq,
+        epoch,
         did_http,
         t0.elapsed().as_millis() as i64,
         r,
@@ -596,7 +634,7 @@ async fn fallback_many(
     seq: u64,
 ) -> Result<Vec<FallbackResp>, String> {
     let ens = prepare_fallback_batch(ens)?;
-    FALLBACK_SEQ.store(seq, Ordering::SeqCst);
+    claim_fallback_seq(seq);
     let mut handles = Vec::with_capacity(ens.len());
     for en in ens {
         let app = app.clone();

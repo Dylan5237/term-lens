@@ -88,7 +88,7 @@ smoke 应理解为"冒烟测试"，Runtime 应理解为"程序运行时环境"�
 - **上下文开关**：删除。云端永远只传术语单词
 - **取词单飞**：同时只跑一次 grab；Alt+T / 托盘翻译必须在后台线程，禁止在事件线程同步 sleep
 - **热键切换**：注册成功后再改内存开关；失败回滚
-- **seqId**：`showTerms` / `renderTerm` 入口发放；lookup 与 fallback 返回后都校验。`fallback_many` / `fallback` 把 seq 写入进程内 `FALLBACK_SEQ`：过期任务不 upsert、不 emit（HTTP 不中止，仍受单请求超时约束）。spawn join 失败只让该行失败，不中断整批。
+- **seqId**：`showTerms` / `renderTerm` 入口发放；lookup 与 fallback 返回后都校验。新 grab 递增 `FALLBACK_EPOCH`，作废在飞 upsert/emit。`lookup` / `lookup_many` / `fallback*` 用 `fetch_max` 单调前进 `FALLBACK_SEQ`（不能把更大 seq 写回更小值）。持有 db 锁后再读代，仍 live 才写入。HTTP 不中止，仍受单请求超时约束。spawn join 失败只让该行失败，不中断整批。
 
 ## 5. 数据模型（v0.2 重写：一词多候选 + 决策日志语义）
 

@@ -524,7 +524,7 @@ async function renderTermList(id) {
   fitWindow();
   let rows;
   try {
-    rows = await invoke('lookup_many', { ens: current.terms });
+    rows = await invoke('lookup_many', { ens: current.terms, seq: id });
   } catch (e) {
     if (id !== seqId) return;
     $('loading').textContent = '本地查询失败: ' + e;
@@ -674,7 +674,7 @@ async function renderTerm(i, incomingId) {
 
   let res;
   try {
-    res = await invoke('lookup', { en });
+    res = await invoke('lookup', { en, seq: id });
   } catch (e) {
     if (id !== seqId) return;
     $('loading').textContent = '本地查询失败: ' + e;

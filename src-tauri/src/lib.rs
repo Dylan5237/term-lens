@@ -9,8 +9,9 @@ pub mod selection;
 pub use capture::*;
 pub use config::*;
 pub use fallback::{
-    cloud_lookup, cloud_preflight, cloud_query_layer, err_chain, fallback_seq_is_live,
-    prepare_fallback_batch, validate_fallback_term, MAX_FALLBACK_TERM_CHARS,
+    cloud_lookup, cloud_preflight, cloud_query_layer, err_chain, fallback_seq_advance,
+    fallback_seq_is_live, fallback_write_live, prepare_fallback_batch, validate_fallback_term,
+    MAX_FALLBACK_TERM_CHARS,
 };
 pub use glossary::*;
 pub use selection::read_os_selection;
@@ -407,6 +408,12 @@ mod tests {
         assert!(planned[2].is_ok());
         assert!(fallback_seq_is_live(3, 3));
         assert!(!fallback_seq_is_live(4, 3));
+        assert_eq!(fallback_seq_advance(1, 2), 2);
+        assert_eq!(fallback_seq_advance(2, 1), 2);
+        assert!(!fallback_seq_is_live(fallback_seq_advance(2, 1), 1));
+        assert!(fallback_write_live(5, 5, 2, 2));
+        assert!(!fallback_write_live(5, 5, 3, 2));
+        assert!(!fallback_write_live(6, 5, 2, 2));
         assert_eq!(cloud_query_layer(&Ok(None)), "cloud-empty");
         assert_eq!(cloud_query_layer(&Err("x".into())), "cloud-err");
     }

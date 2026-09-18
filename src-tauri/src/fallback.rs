@@ -169,6 +169,19 @@ pub fn fallback_seq_is_live(active: u64, seq: u64) -> bool {
     active == seq
 }
 
+pub fn fallback_seq_advance(prev: u64, seq: u64) -> u64 {
+    prev.max(seq)
+}
+
+pub fn fallback_write_live(
+    active_seq: u64,
+    task_seq: u64,
+    active_epoch: u64,
+    task_epoch: u64,
+) -> bool {
+    fallback_seq_is_live(active_seq, task_seq) && active_epoch == task_epoch
+}
+
 pub fn cloud_query_layer(r: &Result<Option<Term>, String>) -> &'static str {
     match r {
         Ok(Some(_)) => "cloud",
