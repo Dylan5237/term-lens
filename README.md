@@ -30,7 +30,7 @@
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/Dylan5237/term-lens/releases/latest) 下载 `TermLens_0.1.6_x64-setup.exe`（currentUser，免管理员）。
+1. 从 [Releases](https://github.com/Dylan5237/term-lens/releases/latest) 下载 `TermLens_0.1.7_x64-setup.exe`（currentUser，免管理员）。
 2. 安装后进程留在托盘。**默认不上云。**
 3. 在普通桌面窗口划选文本，双击 `Ctrl`。
 
@@ -124,7 +124,7 @@ npm run build
 ```
 
 绿色版：`src-tauri\target\release\term-lens.exe`  
-安装包：`src-tauri\target\release\bundle\nsis\TermLens_0.1.6_x64-setup.exe`
+安装包：`src-tauri\target\release\bundle\nsis\TermLens_0.1.7_x64-setup.exe`
 
 开发：`npm run dev`。
 

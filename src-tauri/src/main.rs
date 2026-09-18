@@ -24,6 +24,50 @@ static TRIGGER_AT: AtomicU64 = AtomicU64::new(0);
 static HOOK_APP: Mutex<Option<AppHandle>> = Mutex::new(None);
 static HOTKEY_MODE: AtomicU8 = AtomicU8::new(0);
 static GRAB_BUSY: AtomicBool = AtomicBool::new(false);
+static FALLBACK_SEQ: AtomicU64 = AtomicU64::new(0);
+static FALLBACK_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+fn claim_fallback_seq(seq: u64) {
+    FALLBACK_SEQ.fetch_max(seq, Ordering::SeqCst);
+}
+
+fn fallback_turn() -> &'static tokio::sync::Notify {
+    static TURN: std::sync::OnceLock<tokio::sync::Notify> = std::sync::OnceLock::new();
+    TURN.get_or_init(tokio::sync::Notify::new)
+}
+
+fn cloud_http_slots() -> &'static tokio::sync::Semaphore {
+    static SLOTS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    SLOTS.get_or_init(|| tokio::sync::Semaphore::new(MAX_EXTRACT))
+}
+
+fn invalidate_stale_fallback() {
+    FALLBACK_EPOCH.fetch_add(1, Ordering::SeqCst);
+    fallback_turn().notify_waiters();
+}
+
+async fn wait_epoch_stale(epoch: u64) {
+    let turn = fallback_turn();
+    loop {
+        if FALLBACK_EPOCH.load(Ordering::SeqCst) != epoch {
+            return;
+        }
+        turn.notified().await;
+    }
+}
+
+async fn cloud_lookup_bounded(en: &str, epoch: u64) -> (Result<Option<Term>, String>, bool) {
+    tokio::select! {
+        biased;
+        _ = wait_epoch_stale(epoch) => (Err("已取消".into()), false),
+        pair = async {
+            match cloud_http_slots().acquire().await {
+                Ok(_permit) => (cloud_lookup(en).await, true),
+                Err(_) => (Err("云端并发中断".into()), false),
+            }
+        } => pair,
+    }
+}
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -98,6 +142,7 @@ fn grab_selection_and_show(app: &AppHandle) {
         return;
     }
     let _busy = GrabGuard;
+    invalidate_stale_fallback();
     wait_modifiers_released();
 
     let selected = match read_os_selection() {
@@ -217,6 +262,7 @@ fn cursor_work_area(w: &WebviewWindow, px: f64, py: f64, scale: f64) -> (f64, f6
         .unwrap_or((0.0, 0.0, 1920.0 * scale, 1080.0 * scale))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn pin_overlay_pos(
     x: f64,
     y: f64,
@@ -236,6 +282,7 @@ fn pin_overlay_pos(
     (x.max(min_x).min(max_x), y.max(min_y).min(max_y))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn clamp_overlay_pos(
     px: f64,
     py: f64,
@@ -294,9 +341,7 @@ fn place_overlay(
     let (px, py) = get_cursor_pos();
     let scale = w.scale_factor().map_err(|e| e.to_string())?;
     let (wx, wy, ww, wh) = cursor_work_area(&w, px, py, scale);
-    let max_h = (wh / scale * POPUP_WORK_FRAC)
-        .min(POPUP_MAX_LOGICAL_H)
-        .max(POPUP_MIN_LOGICAL_H);
+    let max_h = (wh / scale * POPUP_WORK_FRAC).clamp(POPUP_MIN_LOGICAL_H, POPUP_MAX_LOGICAL_H);
     let h = height.min(max_h).max(POPUP_MIN_LOGICAL_H);
     let pw = width * scale;
     let ph = h * scale;
@@ -421,7 +466,8 @@ struct LookupResult {
 }
 
 #[tauri::command]
-fn lookup(state: State<AppState>, en: String) -> Result<LookupResult, String> {
+fn lookup(state: State<AppState>, en: String, seq: u64) -> Result<LookupResult, String> {
+    claim_fallback_seq(seq);
     let ctx = state
         .last_selection
         .lock()
@@ -448,7 +494,12 @@ struct LookupItem {
 }
 
 #[tauri::command]
-fn lookup_many(state: State<AppState>, ens: Vec<String>) -> Result<Vec<LookupItem>, String> {
+fn lookup_many(
+    state: State<AppState>,
+    ens: Vec<String>,
+    seq: u64,
+) -> Result<Vec<LookupItem>, String> {
+    claim_fallback_seq(seq);
     let ctx = state
         .last_selection
         .lock()
@@ -475,28 +526,20 @@ fn lookup_many(state: State<AppState>, ens: Vec<String>) -> Result<Vec<LookupIte
     Ok(out)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct FallbackResp {
     result: Option<Term>,
     offline: bool,
     error: Option<String>,
 }
 
-#[tauri::command]
-async fn fallback(app: AppHandle, en: String) -> Result<FallbackResp, String> {
-    validate_fallback_term(&en)?;
-    let r = cloud_lookup(&en).await;
-    let st = app.state::<AppState>();
-    Ok(match r {
-        Ok(Some(t)) => {
-            let conn = st.db.lock().map_err(|e| e.to_string())?;
-            upsert(&conn, &t).map_err(|e| e.to_string())?;
-            FallbackResp {
-                result: Some(t),
-                offline: false,
-                error: None,
-            }
-        }
+fn fallback_resp(r: Result<Option<Term>, String>) -> FallbackResp {
+    match r {
+        Ok(Some(t)) => FallbackResp {
+            result: Some(t),
+            offline: false,
+            error: None,
+        },
         Ok(None) => FallbackResp {
             result: None,
             offline: false,
@@ -507,7 +550,152 @@ async fn fallback(app: AppHandle, en: String) -> Result<FallbackResp, String> {
             offline: true,
             error: Some(e),
         },
-    })
+    }
+}
+
+#[tauri::command]
+async fn fallback(app: AppHandle, en: String, seq: u64) -> Result<FallbackResp, String> {
+    claim_fallback_seq(seq);
+    let epoch = FALLBACK_EPOCH.load(Ordering::SeqCst);
+    Ok(run_one_fallback(app, en, seq, epoch, false).await)
+}
+
+#[derive(Serialize, Clone)]
+struct FallbackItemEvent {
+    seq: u64,
+    en: String,
+    result: Option<Term>,
+    offline: bool,
+    error: Option<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_cloud_lookup(
+    app: &AppHandle,
+    en: &str,
+    seq: u64,
+    epoch: u64,
+    did_http: bool,
+    latency_ms: i64,
+    r: Result<Option<Term>, String>,
+    emit_item: bool,
+) -> FallbackResp {
+    let layer = cloud_query_layer(&r);
+    let mut resp = fallback_resp(r);
+    let locked_ok = {
+        let st = app.state::<AppState>();
+        let locked = st.db.lock();
+        match locked {
+            Ok(conn) => {
+                if did_http {
+                    let _ = log_query(&conn, en, layer, latency_ms);
+                }
+                let live = fallback_write_live(
+                    FALLBACK_SEQ.load(Ordering::SeqCst),
+                    seq,
+                    FALLBACK_EPOCH.load(Ordering::SeqCst),
+                    epoch,
+                );
+                if live {
+                    if let Some(t) = &resp.result {
+                        if let Err(e) = upsert(&conn, t) {
+                            resp.result = None;
+                            resp.offline = true;
+                            resp.error = Some(format!("写入失败: {e}"));
+                        }
+                    }
+                }
+                true
+            }
+            Err(_) => false,
+        }
+    };
+    if !locked_ok {
+        let live = fallback_write_live(
+            FALLBACK_SEQ.load(Ordering::SeqCst),
+            seq,
+            FALLBACK_EPOCH.load(Ordering::SeqCst),
+            epoch,
+        );
+        if live && resp.result.is_some() {
+            resp.result = None;
+            resp.offline = true;
+            resp.error = Some("词表锁定失败".into());
+        }
+    }
+    let live = fallback_write_live(
+        FALLBACK_SEQ.load(Ordering::SeqCst),
+        seq,
+        FALLBACK_EPOCH.load(Ordering::SeqCst),
+        epoch,
+    );
+    if live && emit_item {
+        let _ = app.emit(
+            "fallback-item",
+            FallbackItemEvent {
+                seq,
+                en: en.to_string(),
+                result: resp.result.clone(),
+                offline: resp.offline,
+                error: resp.error.clone(),
+            },
+        );
+    }
+    resp
+}
+
+async fn run_one_fallback(
+    app: AppHandle,
+    en: String,
+    seq: u64,
+    epoch: u64,
+    emit_item: bool,
+) -> FallbackResp {
+    let t0 = std::time::Instant::now();
+    let (r, did_http) = match validate_fallback_term(&en) {
+        Ok(()) => cloud_lookup_bounded(&en, epoch).await,
+        Err(e) => (Err(e), false),
+    };
+    finish_cloud_lookup(
+        &app,
+        &en,
+        seq,
+        epoch,
+        did_http,
+        t0.elapsed().as_millis() as i64,
+        r,
+        emit_item,
+    )
+}
+
+#[tauri::command]
+async fn fallback_many(
+    app: AppHandle,
+    ens: Vec<String>,
+    seq: u64,
+) -> Result<Vec<FallbackResp>, String> {
+    let ens = prepare_fallback_batch(ens)?;
+    claim_fallback_seq(seq);
+    let epoch = FALLBACK_EPOCH.load(Ordering::SeqCst);
+    let mut handles = Vec::with_capacity(ens.len());
+    for en in ens {
+        let app = app.clone();
+        handles.push(tauri::async_runtime::spawn(async move {
+            run_one_fallback(app, en, seq, epoch, true).await
+        }));
+    }
+    let mut pairs = Vec::with_capacity(handles.len());
+    for h in handles {
+        match h.await {
+            Ok(resp) => pairs.push(resp),
+            Err(e) => pairs.push(FallbackResp {
+                result: None,
+                offline: true,
+                error: Some(e.to_string()),
+            }),
+        }
+    }
+    Ok(pairs)
 }
 
 #[tauri::command]
@@ -1272,6 +1460,7 @@ fn main() {
             lookup,
             lookup_many,
             fallback,
+            fallback_many,
             adopt,
             fix,
             reject,

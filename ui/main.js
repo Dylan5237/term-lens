@@ -524,7 +524,7 @@ async function renderTermList(id) {
   fitWindow();
   let rows;
   try {
-    rows = await invoke('lookup_many', { ens: current.terms });
+    rows = await invoke('lookup_many', { ens: current.terms, seq: id });
   } catch (e) {
     if (id !== seqId) return;
     $('loading').textContent = '本地查询失败: ' + e;
@@ -542,30 +542,68 @@ async function renderTermList(id) {
   paintTermList();
   fitWindow();
 
-  for (let i = 0; i < current.rows.length; i++) {
-    const item = current.rows[i];
-    if (item.hit || (item.candidates && item.candidates.length)) continue;
+  const pending = [];
+  current.rows.forEach((item, i) => {
+    if (item.hit || (item.candidates && item.candidates.length)) return;
     item.loading = true;
-    paintTermList();
-    try {
-      const cloud = await invoke('fallback', { en: item.en });
-      if (id !== seqId) return;
-      if (cloud.offline) $('offline').style.display = 'inline';
-      if (cloud.result) {
-        item.hit = cloud.result;
-        item.candidates = cloud.candidates && cloud.candidates.length ? cloud.candidates : [cloud.result];
-      } else {
-        item.cloudError = cloud.error || '无结果';
-      }
-    } catch (e) {
-      if (id !== seqId) return;
-      item.cloudError = '兜底失败';
-      $('offline').style.display = 'inline';
+    pending.push(i);
+  });
+  if (!pending.length) return;
+  paintTermList();
+  fitWindow();
+
+  const applyCloud = (item, i, cloud) => {
+    if (cloud.offline) $('offline').style.display = 'inline';
+    if (cloud.result) {
+      item.hit = cloud.result;
+      item.candidates = cloud.candidates && cloud.candidates.length ? cloud.candidates : [cloud.result];
+    } else {
+      item.cloudError = cloud.error || '无结果';
     }
     item.loading = false;
     if (current.expanded === i) current.displayed = itemDisplayed(item);
     paintTermList();
     fitWindow();
+  };
+
+  const ens = pending.map(i => current.rows[i].en);
+  let unlisten = () => {};
+  try {
+    unlisten = await listen('fallback-item', ev => {
+      if (id !== seqId) return;
+      const p = ev.payload || {};
+      if (p.seq !== id) return;
+      const i = current.rows.findIndex(r => r.en === p.en);
+      if (i < 0) return;
+      applyCloud(current.rows[i], i, p);
+    });
+    if (id !== seqId) return;
+    const clouds = await invoke('fallback_many', { ens, seq: id });
+    if (id !== seqId) return;
+    pending.forEach((i, j) => {
+      const item = current.rows[i];
+      if (!item.loading) return;
+      const cloud = clouds && clouds[j];
+      if (!cloud) {
+        item.loading = false;
+        item.cloudError = '无结果';
+        paintTermList();
+        return;
+      }
+      applyCloud(item, i, cloud);
+    });
+  } catch (e) {
+    if (id !== seqId) return;
+    pending.forEach(i => {
+      const item = current.rows[i];
+      item.loading = false;
+      item.cloudError = item.cloudError || '兜底失败';
+    });
+    $('offline').style.display = 'inline';
+    paintTermList();
+    fitWindow();
+  } finally {
+    unlisten();
   }
 }
 
@@ -636,7 +674,7 @@ async function renderTerm(i, incomingId) {
 
   let res;
   try {
-    res = await invoke('lookup', { en });
+    res = await invoke('lookup', { en, seq: id });
   } catch (e) {
     if (id !== seqId) return;
     $('loading').textContent = '本地查询失败: ' + e;
@@ -659,7 +697,7 @@ async function renderTerm(i, incomingId) {
 
   $('loading').textContent = '本地未命中，云端兜底…';
   try {
-    const cloud = await invoke('fallback', { en });
+    const cloud = await invoke('fallback', { en, seq: id });
     if (id !== seqId) return;
     $('loading').textContent = '';
     if (cloud.offline) $('offline').style.display = 'inline';

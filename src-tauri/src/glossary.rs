@@ -810,9 +810,17 @@ pub fn stats_db(conn: &Connection) -> serde_json::Value {
     let total: i64 = conn
         .query_row("SELECT COUNT(*) FROM query_log", [], |r| r.get(0))
         .unwrap_or(0);
+    let local_n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM query_log WHERE layer_hit NOT LIKE 'cloud%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
     let hits: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM query_log WHERE layer_hit NOT IN ('miss','')",
+            "SELECT COUNT(*) FROM query_log WHERE layer_hit NOT IN ('miss','') \
+             AND layer_hit NOT LIKE 'cloud%'",
             [],
             |r| r.get(0),
         )
@@ -826,18 +834,29 @@ pub fn stats_db(conn: &Connection) -> serde_json::Value {
         .unwrap_or(0);
     let p95: i64 = conn
         .query_row(
-            "SELECT latency_ms FROM query_log WHERE layer_hit!='miss' \
+            "SELECT latency_ms FROM query_log WHERE layer_hit!='miss' AND layer_hit NOT LIKE 'cloud%' \
              ORDER BY latency_ms ASC LIMIT 1 \
-             OFFSET (SELECT (COUNT(*) * 19) / 20 FROM query_log WHERE layer_hit!='miss')",
+             OFFSET (SELECT (COUNT(*) * 19) / 20 FROM query_log \
+               WHERE layer_hit!='miss' AND layer_hit NOT LIKE 'cloud%')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let cloud_p95: i64 = conn
+        .query_row(
+            "SELECT latency_ms FROM query_log WHERE layer_hit LIKE 'cloud%' \
+             ORDER BY latency_ms ASC LIMIT 1 \
+             OFFSET (SELECT (COUNT(*) * 19) / 20 FROM query_log WHERE layer_hit LIKE 'cloud%')",
             [],
             |r| r.get(0),
         )
         .unwrap_or(0);
     serde_json::json!({
         "queries_total": total,
-        "local_hit_rate": if total > 0 { (hits as f64 / total as f64 * 10000.0).round() / 10000.0 } else { 0.0 },
+        "local_hit_rate": if local_n > 0 { (hits as f64 / local_n as f64 * 10000.0).round() / 10000.0 } else { 0.0 },
         "active_terms": terms,
         "local_p95_ms": p95,
+        "cloud_p95_ms": cloud_p95,
     })
 }
 
