@@ -3981,7 +3981,7 @@ dependencies = [
 
 [[package]]
 name = "term-lens"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "arboard",
  "dirs 5.0.1",

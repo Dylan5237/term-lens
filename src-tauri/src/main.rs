@@ -475,28 +475,20 @@ fn lookup_many(state: State<AppState>, ens: Vec<String>) -> Result<Vec<LookupIte
     Ok(out)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct FallbackResp {
     result: Option<Term>,
     offline: bool,
     error: Option<String>,
 }
 
-#[tauri::command]
-async fn fallback(app: AppHandle, en: String) -> Result<FallbackResp, String> {
-    validate_fallback_term(&en)?;
-    let r = cloud_lookup(&en).await;
-    let st = app.state::<AppState>();
-    Ok(match r {
-        Ok(Some(t)) => {
-            let conn = st.db.lock().map_err(|e| e.to_string())?;
-            upsert(&conn, &t).map_err(|e| e.to_string())?;
-            FallbackResp {
-                result: Some(t),
-                offline: false,
-                error: None,
-            }
-        }
+fn fallback_resp(r: Result<Option<Term>, String>) -> FallbackResp {
+    match r {
+        Ok(Some(t)) => FallbackResp {
+            result: Some(t),
+            offline: false,
+            error: None,
+        },
         Ok(None) => FallbackResp {
             result: None,
             offline: false,
@@ -507,7 +499,70 @@ async fn fallback(app: AppHandle, en: String) -> Result<FallbackResp, String> {
             offline: true,
             error: Some(e),
         },
-    })
+    }
+}
+
+#[tauri::command]
+async fn fallback(app: AppHandle, en: String) -> Result<FallbackResp, String> {
+    validate_fallback_term(&en)?;
+    let r = cloud_lookup(&en).await;
+    let resp = fallback_resp(r);
+    if let Some(t) = &resp.result {
+        let st = app.state::<AppState>();
+        let conn = st.db.lock().map_err(|e| e.to_string())?;
+        upsert(&conn, t).map_err(|e| e.to_string())?;
+    }
+    Ok(resp)
+}
+
+#[derive(Serialize, Clone)]
+struct FallbackItemEvent {
+    en: String,
+    result: Option<Term>,
+    offline: bool,
+    error: Option<String>,
+}
+
+#[tauri::command]
+async fn fallback_many(app: AppHandle, ens: Vec<String>) -> Result<Vec<FallbackResp>, String> {
+    if ens.len() > MAX_EXTRACT {
+        return Err("一次最多 8 个未命中词".into());
+    }
+    for en in &ens {
+        validate_fallback_term(en)?;
+    }
+    let mut handles = Vec::with_capacity(ens.len());
+    for en in ens {
+        let app = app.clone();
+        handles.push(tauri::async_runtime::spawn(async move {
+            let r = cloud_lookup(&en).await;
+            let resp = fallback_resp(r);
+            if let Some(t) = &resp.result {
+                {
+                    let st = app.state::<AppState>();
+                    let locked = st.db.lock();
+                    if let Ok(conn) = locked {
+                        let _ = upsert(&conn, t);
+                    }
+                }
+            }
+            let _ = app.emit(
+                "fallback-item",
+                FallbackItemEvent {
+                    en: en.clone(),
+                    result: resp.result.clone(),
+                    offline: resp.offline,
+                    error: resp.error.clone(),
+                },
+            );
+            resp
+        }));
+    }
+    let mut pairs = Vec::with_capacity(handles.len());
+    for h in handles {
+        pairs.push(h.await.map_err(|e| e.to_string())?);
+    }
+    Ok(pairs)
 }
 
 #[tauri::command]
@@ -1272,6 +1327,7 @@ fn main() {
             lookup,
             lookup_many,
             fallback,
+            fallback_many,
             adopt,
             fix,
             reject,
