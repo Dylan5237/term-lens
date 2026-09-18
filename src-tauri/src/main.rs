@@ -522,7 +522,8 @@ fn fallback_resp(r: Result<Option<Term>, String>) -> FallbackResp {
 #[tauri::command]
 async fn fallback(app: AppHandle, en: String, seq: u64) -> Result<FallbackResp, String> {
     claim_fallback_seq(seq);
-    Ok(run_one_fallback(app, en, seq, false).await)
+    let epoch = FALLBACK_EPOCH.load(Ordering::SeqCst);
+    Ok(run_one_fallback(app, en, seq, epoch, false).await)
 }
 
 #[derive(Serialize, Clone)]
@@ -608,8 +609,13 @@ fn finish_cloud_lookup(
     resp
 }
 
-async fn run_one_fallback(app: AppHandle, en: String, seq: u64, emit_item: bool) -> FallbackResp {
-    let epoch = FALLBACK_EPOCH.load(Ordering::SeqCst);
+async fn run_one_fallback(
+    app: AppHandle,
+    en: String,
+    seq: u64,
+    epoch: u64,
+    emit_item: bool,
+) -> FallbackResp {
     let t0 = std::time::Instant::now();
     let (r, did_http) = match validate_fallback_term(&en) {
         Ok(()) => (cloud_lookup(&en).await, true),
@@ -635,11 +641,12 @@ async fn fallback_many(
 ) -> Result<Vec<FallbackResp>, String> {
     let ens = prepare_fallback_batch(ens)?;
     claim_fallback_seq(seq);
+    let epoch = FALLBACK_EPOCH.load(Ordering::SeqCst);
     let mut handles = Vec::with_capacity(ens.len());
     for en in ens {
         let app = app.clone();
         handles.push(tauri::async_runtime::spawn(async move {
-            run_one_fallback(app, en, seq, true).await
+            run_one_fallback(app, en, seq, epoch, true).await
         }));
     }
     let mut pairs = Vec::with_capacity(handles.len());
