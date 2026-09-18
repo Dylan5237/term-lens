@@ -88,7 +88,7 @@ smoke 应理解为"冒烟测试"，Runtime 应理解为"程序运行时环境"�
 - **上下文开关**：删除。云端永远只传术语单词
 - **取词单飞**：同时只跑一次 grab；Alt+T / 托盘翻译必须在后台线程，禁止在事件线程同步 sleep
 - **热键切换**：注册成功后再改内存开关；失败回滚
-- **seqId**：`showTerms` / `renderTerm` 入口发放；lookup 与 fallback 返回后都校验。新 grab 递增 `FALLBACK_EPOCH`，作废在飞 upsert/emit。`lookup` / `lookup_many` / `fallback*` 用 `fetch_max` 单调前进 `FALLBACK_SEQ`。`fallback*` 在 spawn 前捕获 epoch。持有 db 锁后再读代，仍 live 才写入。HTTP 不中止，仍受单请求超时约束。spawn join 失败只让该行失败，不中断整批。
+- **seqId**：`showTerms` / `renderTerm` 入口发放；lookup 与 fallback 返回后都校验。新 grab 递增 `FALLBACK_EPOCH` 并唤醒等待者，**取消在飞 HTTP**（drop 请求）。同时最多 `MAX_EXTRACT`（8）路云端请求。`lookup` / `lookup_many` / `fallback*` 用 `fetch_max` 单调前进 `FALLBACK_SEQ`。`fallback*` 在 spawn 前捕获 epoch。持有 db 锁后再读代，仍 live 才写入。spawn join 失败只让该行失败，不中断整批。
 
 ## 5. 数据模型（v0.2 重写：一词多候选 + 决策日志语义）
 
@@ -169,7 +169,7 @@ CREATE TABLE meta (
 
 - **capture**：global-shortcut / 双击 Ctrl；UIA / 原生 Edit 优先；失败才探针 Ctrl+C 并还原
 - **glossary**：ASCII 词边界提取（CJK 紧贴可抽；`blocked_field` / `huge-doge` / `blockedField` 整段一词；选区本身像术语则整段优先，camel/snake 部件可随后轮询；句子内仅空白相连英文成短语，禁止隔字 bigram）+ 保守归一 + SQLite 等值查询 + 域裁决（不同译法才标多义；同译跨层合并）
-- **fallback**：OpenAI 兼容调用；提示词来自 `%APPDATA%\term-lens\fallback_prompt.md`（每次读取=热重载）。职责是**单术语注释**（非整句翻译）：无上下文时按「中文 AI 编程助手输出」默认域裁决；标识符/无通行译名用 keep 或 note，禁止幻觉编造。IPC 有最大长度/字符类约束；未配置不发请求；未命中词并行、每词单独 prompt。HTTP 完成后写 `query_log`（`layer_hit` 为 `cloud` / `cloud-empty` / `cloud-err`，只记术语）；upsert 失败则该行报错，不把未入库结果当 pending。
+- **fallback**：OpenAI 兼容调用；提示词来自 `%APPDATA%\term-lens\fallback_prompt.md`（每次读取=热重载）。职责是**单术语注释**（非整句翻译）：无上下文时按「中文 AI 编程助手输出」默认域裁决；标识符/无通行译名用 keep 或 note，禁止幻觉编造。IPC 有最大长度/字符类约束；未配置不发请求；未命中词并行、每词单独 prompt。新 grab 取消在飞 HTTP；同时最多 8 路。HTTP 完成后写 `query_log`（`layer_hit` 为 `cloud` / `cloud-empty` / `cloud-err`，只记术语；取消不记）；upsert 失败则该行报错，不把未入库结果当 pending。
 - **overlay**：无边框置顶窗、失焦即隐、采纳/修改/否决；CSP：`default-src 'self'`，`connect-src` 仅 ipc
 - **tray/config**：托盘菜单、`config.toml`（provider/热键，**不含 api_key 正路**）、凭据管理器取 key。0.1.1 默认公网 DeepSeek **只清一次**（无密钥且 timeout 仍为 15000）；打上 `migrate.cloud_default_cleared` 后用户再填同一 URL 保留。toml 中的 api_key 仅在凭据回读成功后删除。
 - **export**：`--export` 输出 CSV（`--format md|agents`：**未实施**）

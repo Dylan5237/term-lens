@@ -31,8 +31,42 @@ fn claim_fallback_seq(seq: u64) {
     FALLBACK_SEQ.fetch_max(seq, Ordering::SeqCst);
 }
 
+fn fallback_turn() -> &'static tokio::sync::Notify {
+    static TURN: std::sync::OnceLock<tokio::sync::Notify> = std::sync::OnceLock::new();
+    TURN.get_or_init(tokio::sync::Notify::new)
+}
+
+fn cloud_http_slots() -> &'static tokio::sync::Semaphore {
+    static SLOTS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    SLOTS.get_or_init(|| tokio::sync::Semaphore::new(MAX_EXTRACT))
+}
+
 fn invalidate_stale_fallback() {
     FALLBACK_EPOCH.fetch_add(1, Ordering::SeqCst);
+    fallback_turn().notify_waiters();
+}
+
+async fn wait_epoch_stale(epoch: u64) {
+    let turn = fallback_turn();
+    loop {
+        if FALLBACK_EPOCH.load(Ordering::SeqCst) != epoch {
+            return;
+        }
+        turn.notified().await;
+    }
+}
+
+async fn cloud_lookup_bounded(en: &str, epoch: u64) -> (Result<Option<Term>, String>, bool) {
+    tokio::select! {
+        biased;
+        _ = wait_epoch_stale(epoch) => (Err("已取消".into()), false),
+        pair = async {
+            match cloud_http_slots().acquire().await {
+                Ok(_permit) => (cloud_lookup(en).await, true),
+                Err(_) => (Err("云端并发中断".into()), false),
+            }
+        } => pair,
+    }
 }
 
 fn now_ms() -> u64 {
@@ -618,7 +652,7 @@ async fn run_one_fallback(
 ) -> FallbackResp {
     let t0 = std::time::Instant::now();
     let (r, did_http) = match validate_fallback_term(&en) {
-        Ok(()) => (cloud_lookup(&en).await, true),
+        Ok(()) => cloud_lookup_bounded(&en, epoch).await,
         Err(e) => (Err(e), false),
     };
     finish_cloud_lookup(
