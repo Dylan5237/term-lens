@@ -262,6 +262,7 @@ fn cursor_work_area(w: &WebviewWindow, px: f64, py: f64, scale: f64) -> (f64, f6
         .unwrap_or((0.0, 0.0, 1920.0 * scale, 1080.0 * scale))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn pin_overlay_pos(
     x: f64,
     y: f64,
@@ -281,6 +282,7 @@ fn pin_overlay_pos(
     (x.max(min_x).min(max_x), y.max(min_y).min(max_y))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn clamp_overlay_pos(
     px: f64,
     py: f64,
@@ -339,9 +341,7 @@ fn place_overlay(
     let (px, py) = get_cursor_pos();
     let scale = w.scale_factor().map_err(|e| e.to_string())?;
     let (wx, wy, ww, wh) = cursor_work_area(&w, px, py, scale);
-    let max_h = (wh / scale * POPUP_WORK_FRAC)
-        .min(POPUP_MAX_LOGICAL_H)
-        .max(POPUP_MIN_LOGICAL_H);
+    let max_h = (wh / scale * POPUP_WORK_FRAC).clamp(POPUP_MIN_LOGICAL_H, POPUP_MAX_LOGICAL_H);
     let h = height.min(max_h).max(POPUP_MIN_LOGICAL_H);
     let pw = width * scale;
     let ph = h * scale;
@@ -569,6 +569,7 @@ struct FallbackItemEvent {
     error: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_cloud_lookup(
     app: &AppHandle,
     en: &str,
