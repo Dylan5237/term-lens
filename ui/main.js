@@ -697,7 +697,7 @@ async function renderTerm(i, incomingId) {
 
   $('loading').textContent = '本地未命中，云端兜底…';
   try {
-    const cloud = await invoke('fallback', { en });
+    const cloud = await invoke('fallback', { en, seq: id });
     if (id !== seqId) return;
     $('loading').textContent = '';
     if (cloud.offline) $('offline').style.display = 'inline';

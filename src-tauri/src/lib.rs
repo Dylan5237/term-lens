@@ -9,7 +9,8 @@ pub mod selection;
 pub use capture::*;
 pub use config::*;
 pub use fallback::{
-    cloud_lookup, cloud_preflight, err_chain, validate_fallback_term, MAX_FALLBACK_TERM_CHARS,
+    cloud_lookup, cloud_preflight, cloud_query_layer, err_chain, fallback_seq_is_live,
+    prepare_fallback_batch, validate_fallback_term, MAX_FALLBACK_TERM_CHARS,
 };
 pub use glossary::*;
 pub use selection::read_os_selection;
@@ -390,6 +391,39 @@ mod tests {
         assert!(validate_fallback_term(&"word ".repeat(40)).is_err());
         assert!(validate_fallback_term("line1\nline2").is_err());
         assert!(validate_fallback_term("foo; DROP TABLE").is_err());
+    }
+
+    #[test]
+    fn fallback_batch_caps_and_isolates_invalid_terms() {
+        assert!(prepare_fallback_batch((0..9).map(|i| format!("t{i}")).collect()).is_err());
+        let ok = prepare_fallback_batch((0..8).map(|i| format!("t{i}")).collect()).unwrap();
+        assert_eq!(ok.len(), 8);
+        let planned: Vec<_> = ["Agent", "line1\nline2", "tool use"]
+            .iter()
+            .map(|e| validate_fallback_term(e))
+            .collect();
+        assert!(planned[0].is_ok());
+        assert!(planned[1].is_err());
+        assert!(planned[2].is_ok());
+        assert!(fallback_seq_is_live(3, 3));
+        assert!(!fallback_seq_is_live(4, 3));
+        assert_eq!(cloud_query_layer(&Ok(None)), "cloud-empty");
+        assert_eq!(cloud_query_layer(&Err("x".into())), "cloud-err");
+    }
+
+    #[test]
+    fn cloud_logs_do_not_skew_local_p95() {
+        let conn = db();
+        for ms in [10_i64, 20, 30, 40, 50] {
+            log_query(&conn, "x", "ai", ms).unwrap();
+        }
+        log_query(&conn, "y", "cloud", 9000).unwrap();
+        let s = stats_db(&conn);
+        assert_eq!(
+            s["local_p95_ms"].as_i64().unwrap(),
+            p95_value(vec![10, 20, 30, 40, 50])
+        );
+        assert_eq!(s["cloud_p95_ms"].as_i64().unwrap(), 9000);
     }
 
     #[test]

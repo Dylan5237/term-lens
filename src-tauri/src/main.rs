@@ -24,6 +24,7 @@ static TRIGGER_AT: AtomicU64 = AtomicU64::new(0);
 static HOOK_APP: Mutex<Option<AppHandle>> = Mutex::new(None);
 static HOTKEY_MODE: AtomicU8 = AtomicU8::new(0);
 static GRAB_BUSY: AtomicBool = AtomicBool::new(false);
+static FALLBACK_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -503,16 +504,9 @@ fn fallback_resp(r: Result<Option<Term>, String>) -> FallbackResp {
 }
 
 #[tauri::command]
-async fn fallback(app: AppHandle, en: String) -> Result<FallbackResp, String> {
-    validate_fallback_term(&en)?;
-    let r = cloud_lookup(&en).await;
-    let resp = fallback_resp(r);
-    if let Some(t) = &resp.result {
-        let st = app.state::<AppState>();
-        let conn = st.db.lock().map_err(|e| e.to_string())?;
-        upsert(&conn, t).map_err(|e| e.to_string())?;
-    }
-    Ok(resp)
+async fn fallback(app: AppHandle, en: String, seq: u64) -> Result<FallbackResp, String> {
+    FALLBACK_SEQ.store(seq, Ordering::SeqCst);
+    Ok(run_one_fallback(app, en, seq, false).await)
 }
 
 #[derive(Serialize, Clone)]
@@ -524,49 +518,102 @@ struct FallbackItemEvent {
     error: Option<String>,
 }
 
+fn finish_cloud_lookup(
+    app: &AppHandle,
+    en: &str,
+    seq: u64,
+    did_http: bool,
+    latency_ms: i64,
+    r: Result<Option<Term>, String>,
+    emit_item: bool,
+) -> FallbackResp {
+    let live = fallback_seq_is_live(FALLBACK_SEQ.load(Ordering::SeqCst), seq);
+    let layer = cloud_query_layer(&r);
+    let mut resp = fallback_resp(r);
+    {
+        let st = app.state::<AppState>();
+        let locked = st.db.lock();
+        match locked {
+            Ok(conn) => {
+                if did_http {
+                    let _ = log_query(&conn, en, layer, latency_ms);
+                }
+                if live {
+                    if let Some(t) = &resp.result {
+                        if let Err(e) = upsert(&conn, t) {
+                            resp.result = None;
+                            resp.offline = true;
+                            resp.error = Some(format!("写入失败: {e}"));
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                if live && resp.result.is_some() {
+                    resp.result = None;
+                    resp.offline = true;
+                    resp.error = Some("词表锁定失败".into());
+                }
+            }
+        }
+    }
+    if live && emit_item {
+        let _ = app.emit(
+            "fallback-item",
+            FallbackItemEvent {
+                seq,
+                en: en.to_string(),
+                result: resp.result.clone(),
+                offline: resp.offline,
+                error: resp.error.clone(),
+            },
+        );
+    }
+    resp
+}
+
+async fn run_one_fallback(app: AppHandle, en: String, seq: u64, emit_item: bool) -> FallbackResp {
+    let t0 = std::time::Instant::now();
+    let (r, did_http) = match validate_fallback_term(&en) {
+        Ok(()) => (cloud_lookup(&en).await, true),
+        Err(e) => (Err(e), false),
+    };
+    finish_cloud_lookup(
+        &app,
+        &en,
+        seq,
+        did_http,
+        t0.elapsed().as_millis() as i64,
+        r,
+        emit_item,
+    )
+}
+
 #[tauri::command]
 async fn fallback_many(
     app: AppHandle,
     ens: Vec<String>,
     seq: u64,
 ) -> Result<Vec<FallbackResp>, String> {
-    if ens.len() > MAX_EXTRACT {
-        return Err("一次最多 8 个未命中词".into());
-    }
+    let ens = prepare_fallback_batch(ens)?;
+    FALLBACK_SEQ.store(seq, Ordering::SeqCst);
     let mut handles = Vec::with_capacity(ens.len());
     for en in ens {
         let app = app.clone();
         handles.push(tauri::async_runtime::spawn(async move {
-            let r = match validate_fallback_term(&en) {
-                Ok(()) => cloud_lookup(&en).await,
-                Err(e) => Err(e),
-            };
-            let resp = fallback_resp(r);
-            if let Some(t) = &resp.result {
-                {
-                    let st = app.state::<AppState>();
-                    let locked = st.db.lock();
-                    if let Ok(conn) = locked {
-                        let _ = upsert(&conn, t);
-                    }
-                }
-            }
-            let _ = app.emit(
-                "fallback-item",
-                FallbackItemEvent {
-                    seq,
-                    en: en.clone(),
-                    result: resp.result.clone(),
-                    offline: resp.offline,
-                    error: resp.error.clone(),
-                },
-            );
-            resp
+            run_one_fallback(app, en, seq, true).await
         }));
     }
     let mut pairs = Vec::with_capacity(handles.len());
     for h in handles {
-        pairs.push(h.await.map_err(|e| e.to_string())?);
+        match h.await {
+            Ok(resp) => pairs.push(resp),
+            Err(e) => pairs.push(FallbackResp {
+                result: None,
+                offline: true,
+                error: Some(e.to_string()),
+            }),
+        }
     }
     Ok(pairs)
 }

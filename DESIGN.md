@@ -88,7 +88,7 @@ smoke 应理解为"冒烟测试"，Runtime 应理解为"程序运行时环境"�
 - **上下文开关**：删除。云端永远只传术语单词
 - **取词单飞**：同时只跑一次 grab；Alt+T / 托盘翻译必须在后台线程，禁止在事件线程同步 sleep
 - **热键切换**：注册成功后再改内存开关；失败回滚
-- **seqId**：`showTerms` / `renderTerm` 入口发放；lookup 与 fallback 返回后都校验；`fallback_many` 的 `fallback-item` 事件携带本次 seq，过期结果丢弃
+- **seqId**：`showTerms` / `renderTerm` 入口发放；lookup 与 fallback 返回后都校验。`fallback_many` / `fallback` 把 seq 写入进程内 `FALLBACK_SEQ`：过期任务不 upsert、不 emit（HTTP 不中止，仍受单请求超时约束）。spawn join 失败只让该行失败，不中断整批。
 
 ## 5. 数据模型（v0.2 重写：一词多候选 + 决策日志语义）
 
@@ -169,7 +169,7 @@ CREATE TABLE meta (
 
 - **capture**：global-shortcut / 双击 Ctrl；UIA / 原生 Edit 优先；失败才探针 Ctrl+C 并还原
 - **glossary**：ASCII 词边界提取（CJK 紧贴可抽；`blocked_field` / `huge-doge` / `blockedField` 整段一词；选区本身像术语则整段优先，camel/snake 部件可随后轮询；句子内仅空白相连英文成短语，禁止隔字 bigram）+ 保守归一 + SQLite 等值查询 + 域裁决（不同译法才标多义；同译跨层合并）
-- **fallback**：OpenAI 兼容调用；提示词来自 `%APPDATA%\term-lens\fallback_prompt.md`（每次读取=热重载）。职责是**单术语注释**（非整句翻译）：无上下文时按「中文 AI 编程助手输出」默认域裁决；标识符/无通行译名用 keep 或 note，禁止幻觉编造。IPC 有最大长度/字符类约束；未配置不发请求；未命中词并行、每词单独 prompt
+- **fallback**：OpenAI 兼容调用；提示词来自 `%APPDATA%\term-lens\fallback_prompt.md`（每次读取=热重载）。职责是**单术语注释**（非整句翻译）：无上下文时按「中文 AI 编程助手输出」默认域裁决；标识符/无通行译名用 keep 或 note，禁止幻觉编造。IPC 有最大长度/字符类约束；未配置不发请求；未命中词并行、每词单独 prompt。HTTP 完成后写 `query_log`（`layer_hit` 为 `cloud` / `cloud-empty` / `cloud-err`，只记术语）；upsert 失败则该行报错，不把未入库结果当 pending。
 - **overlay**：无边框置顶窗、失焦即隐、采纳/修改/否决；CSP：`default-src 'self'`，`connect-src` 仅 ipc
 - **tray/config**：托盘菜单、`config.toml`（provider/热键，**不含 api_key 正路**）、凭据管理器取 key。0.1.1 默认公网 DeepSeek **只清一次**（无密钥且 timeout 仍为 15000）；打上 `migrate.cloud_default_cleared` 后用户再填同一 URL 保留。toml 中的 api_key 仅在凭据回读成功后删除。
 - **export**：`--export` 输出 CSV（`--format md|agents`：**未实施**）
@@ -180,7 +180,7 @@ CREATE TABLE meta (
 |------|----------|------------|----------|
 | 本地命中率 | >70% | >85% | 用真实 AI 输出语料回放测 query_log |
 | 本地路径延迟 p95 | <200ms | <100ms | query_log.latency_ms，**真正 95 分位**（升序 OFFSET n×19/20） |
-| 云端兜底 p95 | <1.2s（仅当已配置） | <1.0s | 计时日志 |
+| 云端兜底 p95 | <1.2s（仅当已配置） | <1.0s | query_log 中 `layer_hit LIKE 'cloud%'` 的 latency_ms，**真正 95 分位** |
 | 悬浮窗取词→显示 | <200ms（命中时） | — | 手动秒表抽查 |
 | 周均查询量 | >50 次/周 | — | 存活验证（没人用就砍项目） |
 

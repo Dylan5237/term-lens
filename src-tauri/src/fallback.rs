@@ -157,3 +157,22 @@ pub async fn cloud_lookup(en: &str) -> Result<Option<Term>, String> {
         status: "pending".into(),
     }))
 }
+
+pub fn prepare_fallback_batch(ens: Vec<String>) -> Result<Vec<String>, String> {
+    if ens.len() > crate::glossary::MAX_EXTRACT {
+        return Err("一次最多 8 个未命中词".into());
+    }
+    Ok(ens)
+}
+
+pub fn fallback_seq_is_live(active: u64, seq: u64) -> bool {
+    active == seq
+}
+
+pub fn cloud_query_layer(r: &Result<Option<Term>, String>) -> &'static str {
+    match r {
+        Ok(Some(_)) => "cloud",
+        Ok(None) => "cloud-empty",
+        Err(_) => "cloud-err",
+    }
+}
